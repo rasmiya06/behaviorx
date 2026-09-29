@@ -17,12 +17,18 @@ import {
 import { AlertCircle, X } from 'lucide-react';
 
 export default function BehaviorXDashboard() {
-  const [targetUrl, setTargetUrl] = useState('http://localhost:3000/demo-app');
+  // CLEAN DEFAULT: URL IS EMPTY UNTIL USER ENTERS IT OR CLICKS 'LOAD NOVASTORE'
+  const [targetUrl, setTargetUrl] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState<'IDLE' | 'SCANNING' | 'COMPLETED' | 'ERROR'>('IDLE');
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // START FROM CLEAN ZERO-STATE (0 nodes, 0 edges, 0 anomalies, 0 logs)
+  // TARGET WEBSITE AUTHENTICATION / SIGN IN CONFIGURATION IN FRONT
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [enableAuth, setEnableAuth] = useState(false);
+
+  // CLEAN ZERO-STATE (0 nodes, 0 edges, 0 anomalies, 0 logs)
   const [nodes, setNodes] = useState<StateNode[]>([]);
   const [edges, setEdges] = useState<StateEdge[]>([]);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
@@ -38,13 +44,13 @@ export default function BehaviorXDashboard() {
 
     const cleanUrl = (targetUrl || '').trim();
     if (!cleanUrl) {
-      setValidationError('Please enter a target URL before scanning. (e.g. http://localhost:3000/demo-app)');
+      setValidationError('Please enter a website URL to scan (e.g. https://example.com or click "Load NovaStore").');
       return;
     }
 
     try {
       if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('/')) {
-        new URL(`http://${cleanUrl}`);
+        new URL(`https://${cleanUrl}`);
       }
     } catch {
       setValidationError(`Invalid URL format: "${cleanUrl}". Please enter a valid HTTP or HTTPS address.`);
@@ -62,7 +68,7 @@ export default function BehaviorXDashboard() {
       id: `log_init_${Date.now()}`,
       timestamp: '00:00.00',
       level: 'INFO',
-      message: `INITIATING REAL PLAYWRIGHT CRAWLER for ${cleanUrl}`,
+      message: `INITIATING REAL PLAYWRIGHT CRAWLER for ${cleanUrl}${enableAuth && authEmail ? ` [Auth: ${authEmail}]` : ''}`,
     };
     setLogs([startLog]);
 
@@ -70,7 +76,14 @@ export default function BehaviorXDashboard() {
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetUrl: cleanUrl }),
+        body: JSON.stringify({
+          targetUrl: cleanUrl,
+          auth: {
+            email: authEmail,
+            password: authPassword,
+            enabled: enableAuth,
+          },
+        }),
       });
 
       const data = await res.json();
@@ -114,7 +127,7 @@ export default function BehaviorXDashboard() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 font-sans">
-      {/* Top Navigation */}
+      {/* Top Navigation with Target Sign In In Front */}
       <TopNav
         url={targetUrl}
         setUrl={(val) => {
@@ -125,6 +138,12 @@ export default function BehaviorXDashboard() {
         onStartScan={handleStartScan}
         status={scanStatus}
         anomaliesCount={anomalies.length}
+        authEmail={authEmail}
+        setAuthEmail={setAuthEmail}
+        authPassword={authPassword}
+        setAuthPassword={setAuthPassword}
+        enableAuth={enableAuth}
+        setEnableAuth={setEnableAuth}
       />
 
       {/* Validation Error Banner */}

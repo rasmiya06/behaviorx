@@ -5,10 +5,11 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const targetUrl = (body.targetUrl || '').trim();
+    const auth = body.auth;
 
     if (!targetUrl) {
       return NextResponse.json(
-        { error: 'Target URL is required. Please provide a valid web application URL to scan.' },
+        { error: 'Target URL is required. Please enter any web application or website URL to scan.' },
         { status: 400 }
       );
     }
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
     const report = await runCrawl({
       targetUrl,
       baseUrl,
+      auth,
     });
 
     return NextResponse.json(report);
