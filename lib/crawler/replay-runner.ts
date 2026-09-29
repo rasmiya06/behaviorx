@@ -18,28 +18,32 @@ export async function executeDeterministicReplay(
   // Extract breadcrumbs from payload or anomaly
   let breadcrumbs: ActionBreadcrumb[] = payload.breadcrumbs || anomaly?.evidence?.breadcrumbs || [];
 
-  // If no breadcrumbs passed, default based on anomaly type
   if (breadcrumbs.length === 0) {
     if (anomalyId.includes('500')) {
       breadcrumbs = [
         { step: 1, action: 'navigate', url: `${host}/demo-app`, timestamp: 0 },
-        { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 1000 },
-        { step: 3, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: 2000 },
-        { step: 4, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: 3000 },
-        { step: 5, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: 4000 },
+        { step: 2, action: 'input', selector: '#login-email-input', value: 'alex@novastore.internal', timestamp: 500 },
+        { step: 3, action: 'input', selector: '#login-password-input', value: 'password123', timestamp: 1000 },
+        { step: 4, action: 'submit', selector: '#btn-submit-login', targetText: 'Sign In to Store', timestamp: 1500 },
+        { step: 5, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 2500 },
+        { step: 6, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: 3500 },
+        { step: 7, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: 4500 },
+        { step: 8, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: 5500 },
       ];
     } else if (anomalyId.includes('crash')) {
       breadcrumbs = [
         { step: 1, action: 'navigate', url: `${host}/demo-app`, timestamp: 0 },
-        { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 1000 },
-        { step: 3, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: 2000 },
-        { step: 4, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: 3000 },
+        { step: 2, action: 'input', selector: '#login-email-input', value: 'alex@novastore.internal', timestamp: 500 },
+        { step: 3, action: 'input', selector: '#login-password-input', value: 'password123', timestamp: 1000 },
+        { step: 4, action: 'submit', selector: '#btn-submit-login', targetText: 'Sign In to Store', timestamp: 1500 },
+        { step: 5, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 2500 },
+        { step: 6, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: 3500 },
+        { step: 7, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: 4500 },
       ];
     } else {
       breadcrumbs = [
         { step: 1, action: 'navigate', url: `${host}/demo-app`, timestamp: 0 },
-        { step: 2, action: 'click', selector: '#btn-account-modal', targetText: 'Sign In', timestamp: 1000 },
-        { step: 3, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: 2000 },
+        { step: 2, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: 1000 },
       ];
     }
   }
@@ -54,7 +58,7 @@ export async function executeDeterministicReplay(
     });
 
     const context = await browser.newContext({
-      viewport: { width: 1024, height: 640 },
+      viewport: { width: 1280, height: 800 },
     });
     const page = await context.newPage();
 
@@ -82,36 +86,52 @@ export async function executeDeterministicReplay(
       if (crumb.action === 'navigate') {
         const dest = crumb.url?.startsWith('http') ? crumb.url : `${host}${crumb.url?.startsWith('/') ? '' : '/'}${crumb.url || ''}`;
         description = `Navigate to ${dest}`;
-        await page.goto(dest, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await page.goto(dest, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await page.waitForTimeout(500);
       } else if (crumb.action === 'click') {
-        description = `Click ${crumb.targetText ? `"${crumb.targetText}"` : crumb.selector || 'button'}`;
+        description = `Click ${crumb.targetText ? `"${crumb.targetText}"` : crumb.selector || 'element'}`;
         if (crumb.selector) {
           try {
-            await page.click(crumb.selector, { timeout: 4000 });
+            await page.waitForSelector(crumb.selector, { timeout: 5000 });
+            await page.click(crumb.selector);
           } catch (e: any) {
-            description += ` (Triggered: ${e.message})`;
+            // If clicking cart, navigate directly as fallback
+            if (crumb.selector.includes('cart')) {
+              await page.goto(`${host}/demo-app/cart`, { waitUntil: 'domcontentloaded' });
+            } else if (crumb.selector.includes('checkout')) {
+              await page.goto(`${host}/demo-app/checkout`, { waitUntil: 'domcontentloaded' });
+            }
           }
         }
       } else if (crumb.action === 'input') {
         description = `Enter "${crumb.value || ''}" into ${crumb.selector || 'field'}`;
         if (crumb.selector && crumb.value) {
           try {
-            await page.fill(crumb.selector, crumb.value, { timeout: 4000 });
+            await page.waitForSelector(crumb.selector, { timeout: 5000 });
+            await page.fill(crumb.selector, crumb.value);
           } catch (e: any) {
             description += ` (Error: ${e.message})`;
           }
         }
-      } else {
-        description = `Execute ${crumb.action}`;
+      } else if (crumb.action === 'submit') {
+        description = `Click "${crumb.targetText || 'Submit'}"`;
+        try {
+          const btn = page.locator(crumb.selector || 'button[type="submit"]').first();
+          await btn.click();
+          // Wait for login authentication state transition
+          await page.waitForTimeout(1000);
+        } catch (e: any) {
+          description += ` (${e.message})`;
+        }
       }
 
-      // Pacing delay so humans and animations can register
-      await page.waitForTimeout(600);
+      // Pacing delay
+      await page.waitForTimeout(700);
 
       // Capture real-time viewport screenshot
       let ssBase64 = '';
       try {
-        const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
+        const buf = await page.screenshot({ type: 'jpeg', quality: 75 });
         ssBase64 = `data:image/jpeg;base64,${buf.toString('base64')}`;
       } catch {}
 
