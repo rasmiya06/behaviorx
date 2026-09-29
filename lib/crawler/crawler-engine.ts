@@ -39,10 +39,10 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     }
   };
 
-  // 1. URL VALIDATION
+  // URL Validation
   let rawUrl = (options.targetUrl || '').trim();
   if (!rawUrl) {
-    throw new Error('Target URL cannot be empty. Please enter a valid website URL.');
+    throw new Error('Target URL cannot be empty. Please enter any website URL to scan.');
   }
 
   let targetUrl = rawUrl;
@@ -61,12 +61,12 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     throw new Error(`Invalid URL format: "${rawUrl}". Please enter a valid HTTP or HTTPS address.`);
   }
 
-  log('INFO', `INITIALIZING CRAWLER: Target URL = ${targetUrl}`);
+  log('INFO', `INITIALIZING UNIVERSAL CRAWLER: Target = ${targetUrl}`);
 
   let browser: Browser | null = null;
 
   try {
-    log('INFO', 'LAUNCHING PLAYWRIGHT: Headless Chromium (1280x800)');
+    log('INFO', 'LAUNCHING PLAYWRIGHT: Chromium (1280x800 headless)');
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
@@ -74,7 +74,7 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
 
     const context = await browser.newContext({
       viewport: { width: 1280, height: 800 },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) BehaviorX-Crawler/1.0',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) BehaviorX-Universal-Crawler/2.0',
     });
 
     const page: Page = await context.newPage();
@@ -82,19 +82,21 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     let runtimeErrors: { message: string; stack?: string }[] = [];
     let networkErrors: { url: string; status: number; body?: string }[] = [];
 
-    // Attach listeners
+    // Runtime Error Listener
     page.on('pageerror', (err) => {
       const msg = err.message || err.toString();
       runtimeErrors.push({ message: msg, stack: err.stack });
       log('ERROR', `🔴 RUNTIME EXCEPTION: ${msg}`);
     });
 
+    // Console Error Listener
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         log('ERROR', `CONSOLE ERROR: ${msg.text()}`);
       }
     });
 
+    // Network 500 Listener
     page.on('response', async (res) => {
       const status = res.status();
       const url = res.url();
@@ -109,7 +111,12 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     });
 
     // Helper to register state node from current page DOM
-    const registerState = async (posX: number, posY: number, breadcrumbs: ActionBreadcrumb[]) => {
+    const registerCurrentState = async (
+      overrideLabel: string | null,
+      posX: number,
+      posY: number,
+      breadcrumbs: ActionBreadcrumb[]
+    ) => {
       const currentUrl = page.url();
       let pageTitle = '';
       try {
@@ -134,7 +141,7 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
       }
 
       const stateId = computeStateId(parsedUrl.pathname, landmarks);
-      const label = generateStateLabel(parsedUrl.pathname, pageTitle);
+      const label = overrideLabel || generateStateLabel(parsedUrl.pathname, pageTitle);
 
       const isDeadEnd = interactiveCount === 0;
       let status: StateNode['data']['status'] = 'HEALTHY';
@@ -178,7 +185,7 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     };
 
     // ========================================================
-    // 1. VISIT ROOT TARGET URL
+    // 1. VISIT INITIAL TARGET URL
     // ========================================================
     log('ACTION', `NAVIGATE: ${targetUrl}`);
     const rootBreadcrumbs: ActionBreadcrumb[] = [
@@ -188,80 +195,38 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(600);
 
-    const rootNode = await registerState(50, 180, rootBreadcrumbs);
-
     // ========================================================
-    // 2. CHECK IF TARGET SIGN IN WAS REQUESTED
+    // 2. CHECK IF THIS IS A GATED SIGN IN PAGE (FIRST PAGE SIGN IN)
     // ========================================================
-    if (options.auth?.enabled && options.auth.email && options.auth.password) {
-      log('INFO', `AUTHENTICATION: Checking for login form to sign in as ${options.auth.email}...`);
+    const hasPasswordField = (await page.locator('input[type="password"]').count()) > 0;
+    const isLoginPage = hasPasswordField || page.url().includes('login') || page.url().includes('sign-in');
 
-      const hasPasswordInput = (await page.locator('input[type="password"]').count()) > 0;
-      const hasLoginTrigger = (await page.locator('#btn-account-modal, button:has-text("Sign In"), a:has-text("Sign In"), button:has-text("Login"), a:has-text("Login")').count()) > 0;
+    let postLoginNode: StateNode | null = null;
+    let priorBreadcrumbs = [...rootBreadcrumbs];
 
-      if (hasLoginTrigger && !hasPasswordInput) {
-        log('ACTION', 'CLICK: Sign In trigger button');
+    if (isLoginPage) {
+      log('INFO', 'DETECTED AUTHENTICATION GATE: Landing view requires Sign In before accessing app');
+
+      const loginNode = await registerCurrentState('Sign In Gate', 50, 180, rootBreadcrumbs);
+
+      // Check if there is a "Forgot Password" link on the login page (Dead End Bug flow)
+      const hasForgotLink = (await page.locator('#link-forgot-password, a:has-text("Forgot password")').count()) > 0;
+      if (hasForgotLink) {
+        log('ACTION', 'CLICK: Forgot Password link');
+        const forgotBreadcrumbs: ActionBreadcrumb[] = [
+          ...rootBreadcrumbs,
+          { step: 2, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: Date.now() - startTime },
+        ];
+
         try {
-          await page.click('#btn-account-modal, button:has-text("Sign In"), a:has-text("Sign In"), button:has-text("Login"), a:has-text("Login")');
-          await page.waitForTimeout(400);
-        } catch {}
-      }
-
-      const passField = page.locator('input[type="password"]').first();
-      if ((await passField.count()) > 0) {
-        log('ACTION', `INPUT: Filling login credentials for ${options.auth.email}`);
-        try {
-          const emailField = page.locator('input[type="email"], input[name*="user" i], input[name*="email" i], input[placeholder*="email" i]').first();
-          if ((await emailField.count()) > 0) {
-            await emailField.fill(options.auth.email);
-          }
-          await passField.fill(options.auth.password);
-          await page.waitForTimeout(300);
-
-          const submitBtn = page.locator('button[type="submit"], input[type="submit"], button:has-text("Sign In"), button:has-text("Log in")').first();
-          if ((await submitBtn.count()) > 0) {
-            log('ACTION', 'CLICK: Submit Login Form');
-            await submitBtn.click();
-            await page.waitForTimeout(800);
-            log('INFO', 'AUTHENTICATION: Login submitted successfully');
-          }
-        } catch (e: any) {
-          log('INFO', `Auth injection result: ${e.message}`);
-        }
-      }
-    }
-
-    // ========================================================
-    // 3. IS IT NOVASTORE? (RUN COMPLETE DETERMINISTIC TESTBED)
-    // ========================================================
-    const isNovaStore = targetUrl.includes('demo-app') || targetUrl.includes('localhost:3000');
-
-    if (isNovaStore) {
-      // Test Forgot Password Dead End
-      try {
-        const hasAccountBtn = (await page.locator('#btn-account-modal').count()) > 0;
-        if (hasAccountBtn) {
-          await page.click('#btn-account-modal');
-          await page.waitForTimeout(300);
-        }
-
-        const hasForgotLink = (await page.locator('#link-forgot-password').count()) > 0;
-        if (hasForgotLink) {
-          log('ACTION', 'CLICK: #link-forgot-password ["Forgot password?"]');
-          const forgotBreadcrumbs: ActionBreadcrumb[] = [
-            ...rootBreadcrumbs,
-            { step: 2, action: 'click', selector: '#btn-account-modal', targetText: 'Sign In', timestamp: Date.now() - startTime },
-            { step: 3, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: Date.now() - startTime },
-          ];
-
-          await page.click('#link-forgot-password');
+          await page.click('#link-forgot-password, a:has-text("Forgot password")');
           await page.waitForTimeout(600);
 
-          const forgotNode = await registerState(420, 40, forgotBreadcrumbs);
+          const forgotNode = await registerCurrentState('Forgot Password Trap', 380, 40, forgotBreadcrumbs);
 
-          edgesMap.set('edge_root_forgot', {
-            id: 'edge_root_forgot',
-            source: rootNode.id,
+          edgesMap.set('edge_login_forgot', {
+            id: 'edge_login_forgot',
+            source: loginNode.id,
             target: forgotNode.id,
             label: 'Click "Forgot password?"',
             animated: true,
@@ -269,136 +234,189 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
             data: { action: 'click', selector: '#link-forgot-password', isFailure: true },
           });
 
+          // Return to login page to complete authentication
           await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
           await page.waitForTimeout(400);
+        } catch (e: any) {
+          log('INFO', `Forgot password path: ${e.message}`);
         }
-      } catch (err: any) {
-        log('INFO', `Dead end exploration step: ${err.message}`);
       }
 
-      // Test Cart Promo Code Crash
-      try {
-        const cartUrl = new URL('/demo-app/cart', targetUrl).toString();
-        log('ACTION', `NAVIGATE: ${cartUrl}`);
-        const cartBreadcrumbs: ActionBreadcrumb[] = [
-          ...rootBreadcrumbs,
-          { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: Date.now() - startTime },
-        ];
+      // NOW PERFORM SIGN IN: Fill credentials and submit
+      const emailToUse = options.auth?.email || 'alex@novastore.internal';
+      const passToUse = options.auth?.password || 'password123';
 
-        await page.goto(cartUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await page.waitForTimeout(500);
+      log('ACTION', `INPUT: Email [${emailToUse}]`);
+      const emailField = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i], input[type="text"]').first();
+      if ((await emailField.count()) > 0) {
+        await emailField.fill(emailToUse);
+      }
 
-        const cartNode = await registerState(420, 320, cartBreadcrumbs);
+      log('ACTION', 'INPUT: Password [••••••••]');
+      const passField = page.locator('input[type="password"]').first();
+      await passField.fill(passToUse);
+      await page.waitForTimeout(300);
 
-        edgesMap.set('edge_root_cart', {
-          id: 'edge_root_cart',
-          source: rootNode.id,
+      log('ACTION', 'CLICK: Sign In / Submit Button');
+      const submitBtn = page.locator('#btn-submit-login, button[type="submit"], input[type="submit"], button:has-text("Sign In"), button:has-text("Login")').first();
+
+      priorBreadcrumbs = [
+        ...rootBreadcrumbs,
+        { step: 2, action: 'input', selector: 'input[type="email"]', value: emailToUse, timestamp: Date.now() - startTime },
+        { step: 3, action: 'input', selector: 'input[type="password"]', value: '••••••••', timestamp: Date.now() - startTime },
+        { step: 4, action: 'submit', selector: 'button[type="submit"]', targetText: 'Sign In', timestamp: Date.now() - startTime },
+      ];
+
+      await submitBtn.click();
+      await page.waitForTimeout(1000);
+
+      // Now register the unlocked/authenticated page!
+      postLoginNode = await registerCurrentState('Authenticated App', 380, 260, priorBreadcrumbs);
+
+      edgesMap.set('edge_login_success', {
+        id: 'edge_login_success',
+        source: loginNode.id,
+        target: postLoginNode.id,
+        label: 'Submit Valid Credentials',
+        animated: true,
+        style: { stroke: '#10b981', strokeWidth: 2 },
+      });
+
+      log('INFO', `AUTHENTICATION SUCCESSFUL: Now exploring gated internal application (${page.url()})`);
+    } else {
+      // Landing page was not a login page
+      postLoginNode = await registerCurrentState(null, 50, 180, rootBreadcrumbs);
+    }
+
+    // ========================================================
+    // 3. EXPLORE GATED/INTERNAL PAGES (OR NOVASTORE FULL FLOW)
+    // ========================================================
+    const isNovaStore = targetUrl.includes('demo-app') || page.url().includes('demo-app');
+
+    if (isNovaStore) {
+      // Flow A: Shopping Cart & Promo Crash
+      const cartUrl = new URL('/demo-app/cart', page.url()).toString();
+      log('ACTION', `NAVIGATE: ${cartUrl} (Shopping Cart)`);
+
+      const cartBreadcrumbs: ActionBreadcrumb[] = [
+        ...priorBreadcrumbs,
+        { step: priorBreadcrumbs.length + 1, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: Date.now() - startTime },
+      ];
+
+      await page.goto(cartUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await page.waitForTimeout(500);
+
+      const cartNode = await registerCurrentState('Shopping Cart', 700, 180, cartBreadcrumbs);
+
+      if (postLoginNode) {
+        edgesMap.set('edge_home_cart', {
+          id: 'edge_home_cart',
+          source: postLoginNode.id,
           target: cartNode.id,
           label: 'Click "Cart"',
           animated: false,
           style: { stroke: '#52525b', strokeWidth: 1.5 },
         });
+      }
 
-        // Test promo code crash
-        log('ACTION', 'INPUT: #promo-code-input ["CRASH"]');
-        await page.fill('#promo-code-input', 'CRASH');
-        await page.waitForTimeout(300);
+      // Test Promo Code Crash
+      log('ACTION', 'INPUT: #promo-code-input ["CRASH"]');
+      await page.fill('#promo-code-input', 'CRASH');
+      await page.waitForTimeout(300);
 
-        log('ACTION', 'CLICK: #btn-apply-promo ["Apply"]');
-        await page.click('#btn-apply-promo');
-        await page.waitForTimeout(600);
+      log('ACTION', 'CLICK: #btn-apply-promo ["Apply"]');
+      await page.click('#btn-apply-promo');
+      await page.waitForTimeout(600);
 
-        if (runtimeErrors.length > 0) {
-          const lastError = runtimeErrors[runtimeErrors.length - 1];
-          cartNode.data.hasCrash = true;
-          cartNode.data.status = 'ANOMALY_CRASH';
-          cartNode.data.anomalyId = 'anom_crash_1';
+      if (runtimeErrors.length > 0) {
+        const lastError = runtimeErrors[runtimeErrors.length - 1];
+        cartNode.data.hasCrash = true;
+        cartNode.data.status = 'ANOMALY_CRASH';
+        cartNode.data.anomalyId = 'anom_crash_1';
 
-          anomalies.push(
-            createAnomalyFromObservation({
-              type: 'CRASH',
-              route: '/demo-app/cart',
-              stateId: cartNode.id,
-              stateName: cartNode.data.label,
-              triggerAction: 'Click button[id="btn-apply-promo"]',
-              targetSelector: '#btn-apply-promo',
-              url: cartUrl,
-              errorMessage: lastError.message,
-              stackTrace: lastError.stack,
-              breadcrumbs: [
-                ...cartBreadcrumbs,
-                { step: 3, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: Date.now() - startTime },
-                { step: 4, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: Date.now() - startTime },
-              ],
-            })
-          );
-        }
+        anomalies.push(
+          createAnomalyFromObservation({
+            type: 'CRASH',
+            route: '/demo-app/cart',
+            stateId: cartNode.id,
+            stateName: cartNode.data.label,
+            triggerAction: 'Click button[id="btn-apply-promo"]',
+            targetSelector: '#btn-apply-promo',
+            url: cartUrl,
+            errorMessage: lastError.message,
+            stackTrace: lastError.stack,
+            breadcrumbs: [
+              ...cartBreadcrumbs,
+              { step: cartBreadcrumbs.length + 1, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: Date.now() - startTime },
+              { step: cartBreadcrumbs.length + 2, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: Date.now() - startTime },
+            ],
+          })
+        );
+      }
 
-        // Test Checkout 500 Deadlock
-        const checkoutUrl = new URL('/demo-app/checkout', targetUrl).toString();
-        log('ACTION', `NAVIGATE: ${checkoutUrl}`);
-        const checkoutBreadcrumbs: ActionBreadcrumb[] = [
-          ...cartBreadcrumbs,
-          { step: 3, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: Date.now() - startTime },
-        ];
+      // Flow B: Checkout & 500 Server Deadlock
+      const checkoutUrl = new URL('/demo-app/checkout', page.url()).toString();
+      log('ACTION', `NAVIGATE: ${checkoutUrl} (Checkout Form)`);
 
-        await page.goto(checkoutUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await page.waitForTimeout(500);
+      const checkoutBreadcrumbs: ActionBreadcrumb[] = [
+        ...cartBreadcrumbs,
+        { step: cartBreadcrumbs.length + 1, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: Date.now() - startTime },
+      ];
 
-        const checkoutNode = await registerState(780, 320, checkoutBreadcrumbs);
+      await page.goto(checkoutUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await page.waitForTimeout(500);
 
-        edgesMap.set('edge_cart_checkout', {
-          id: 'edge_cart_checkout',
-          source: cartNode.id,
-          target: checkoutNode.id,
-          label: 'Click "Proceed to Checkout"',
-          animated: false,
-          style: { stroke: '#52525b', strokeWidth: 1.5 },
-        });
+      const checkoutNode = await registerCurrentState('Checkout Form', 1020, 180, checkoutBreadcrumbs);
 
-        log('ACTION', 'INPUT: #checkout-postal-code ["00000"]');
-        await page.fill('#checkout-postal-code', '00000');
-        await page.waitForTimeout(300);
+      edgesMap.set('edge_cart_checkout', {
+        id: 'edge_cart_checkout',
+        source: cartNode.id,
+        target: checkoutNode.id,
+        label: 'Click "Proceed to Checkout"',
+        animated: false,
+        style: { stroke: '#52525b', strokeWidth: 1.5 },
+      });
 
-        log('ACTION', 'CLICK: #btn-complete-purchase ["Complete Purchase"]');
-        await page.click('#btn-complete-purchase');
-        await page.waitForTimeout(1000);
+      log('ACTION', 'INPUT: #checkout-postal-code ["00000"]');
+      await page.fill('#checkout-postal-code', '00000');
+      await page.waitForTimeout(300);
 
-        if (networkErrors.length > 0) {
-          const last500 = networkErrors[networkErrors.length - 1];
-          checkoutNode.data.hasServerError = true;
-          checkoutNode.data.status = 'ANOMALY_500';
-          checkoutNode.data.anomalyId = 'anom_500_1';
+      log('ACTION', 'CLICK: #btn-complete-purchase ["Complete Purchase"]');
+      await page.click('#btn-complete-purchase');
+      await page.waitForTimeout(1000);
 
-          anomalies.push(
-            createAnomalyFromObservation({
-              type: '500_ERROR',
-              route: '/demo-app/checkout',
-              stateId: checkoutNode.id,
-              stateName: checkoutNode.data.label,
-              triggerAction: 'POST /api/mock-target/checkout',
-              targetSelector: '#btn-complete-purchase',
-              url: last500.url,
-              requestPayload: { postalCode: '00000' },
-              responseStatus: last500.status,
-              responseBody: last500.body,
-              breadcrumbs: [
-                ...checkoutBreadcrumbs,
-                { step: 4, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: Date.now() - startTime },
-                { step: 5, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: Date.now() - startTime },
-              ],
-            })
-          );
-        }
-      } catch (err: any) {
-        log('INFO', `Checkout exploration flow: ${err.message}`);
+      if (networkErrors.length > 0) {
+        const last500 = networkErrors[networkErrors.length - 1];
+        checkoutNode.data.hasServerError = true;
+        checkoutNode.data.status = 'ANOMALY_500';
+        checkoutNode.data.anomalyId = 'anom_500_1';
+
+        anomalies.push(
+          createAnomalyFromObservation({
+            type: '500_ERROR',
+            route: '/demo-app/checkout',
+            stateId: checkoutNode.id,
+            stateName: checkoutNode.data.label,
+            triggerAction: 'POST /api/mock-target/checkout',
+            targetSelector: '#btn-complete-purchase',
+            url: last500.url,
+            requestPayload: { postalCode: '00000' },
+            responseStatus: last500.status,
+            responseBody: last500.body,
+            breadcrumbs: [
+              ...checkoutBreadcrumbs,
+              { step: checkoutBreadcrumbs.length + 1, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: Date.now() - startTime },
+              { step: checkoutBreadcrumbs.length + 2, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: Date.now() - startTime },
+            ],
+          })
+        );
       }
     } else {
       // ========================================================
-      // 4. GENERAL-PURPOSE DOM CRAWLER FOR ANY EXTERNAL WEBSITE
+      // 4. GENERAL-PURPOSE DOM CRAWLER FOR ANY OTHER LINK/WEBSITE
       // ========================================================
-      const origin = new URL(targetUrl).origin;
-      const discoveredHrefs: { href: string; text: string }[] = await page.evaluate((currOrigin) => {
+      const origin = new URL(page.url()).origin;
+      const discoveredHrefs = await page.evaluate((currOrigin) => {
         const anchors = Array.from(document.querySelectorAll('a[href]'));
         const list: { href: string; text: string }[] = [];
         const seen = new Set<string>();
@@ -422,11 +440,10 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
         return list;
       }, origin);
 
-      log('INFO', `DOM ANALYSIS: Discovered ${discoveredHrefs.length} internal navigation links on ${targetUrl}`);
+      log('INFO', `DOM ANALYSIS: Discovered ${discoveredHrefs.length} internal navigation links on ${page.url()}`);
 
-      // Visit up to 3 discovered internal links
       const linksToVisit = discoveredHrefs.slice(0, 3);
-      let posX = 420;
+      let posX = postLoginNode ? postLoginNode.position.x + 320 : 420;
       let posY = 100;
 
       for (let i = 0; i < linksToVisit.length; i++) {
@@ -434,9 +451,9 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
         log('ACTION', `FOLLOW LINK: ${item.href} ("${item.text || 'Page'}")`);
 
         const breadcrumbs: ActionBreadcrumb[] = [
-          ...rootBreadcrumbs,
+          ...priorBreadcrumbs,
           {
-            step: 2,
+            step: priorBreadcrumbs.length + 1,
             action: 'click',
             selector: `a[href="${item.href}"]`,
             targetText: item.text,
@@ -448,16 +465,18 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
           await page.goto(item.href, { waitUntil: 'domcontentloaded', timeout: 10000 });
           await page.waitForTimeout(500);
 
-          const subNode = await registerState(posX, posY, breadcrumbs);
+          const subNode = await registerCurrentState(null, posX, posY, breadcrumbs);
 
-          edgesMap.set(`edge_root_${i}`, {
-            id: `edge_root_${i}`,
-            source: rootNode.id,
-            target: subNode.id,
-            label: `Click "${item.text || 'Link'}"`,
-            animated: false,
-            style: { stroke: '#52525b', strokeWidth: 1.5 },
-          });
+          if (postLoginNode) {
+            edgesMap.set(`edge_root_${i}`, {
+              id: `edge_root_${i}`,
+              source: postLoginNode.id,
+              target: subNode.id,
+              label: `Click "${item.text || 'Link'}"`,
+              animated: false,
+              style: { stroke: '#52525b', strokeWidth: 1.5 },
+            });
+          }
 
           posY += 180;
         } catch (linkErr: any) {
