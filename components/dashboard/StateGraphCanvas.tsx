@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -12,6 +12,7 @@ import {
   useEdgesState,
   BackgroundVariant,
 } from '@xyflow/react';
+import { Map as MapIcon, X } from 'lucide-react';
 import { CustomStateNode } from './CustomStateNode';
 import { StateNode, StateEdge } from '@/lib/types';
 
@@ -28,6 +29,7 @@ export function StateGraphCanvas({
   onSelectNode,
   selectedNodeId,
 }: StateGraphCanvasProps) {
+  const [showMiniMap, setShowMiniMap] = useState(false);
   const nodeTypes = useMemo(() => ({ stateNode: CustomStateNode }), []);
 
   const formattedNodes = useMemo(() => {
@@ -119,16 +121,44 @@ export function StateGraphCanvas({
           showInteractive={false}
           className="!bottom-4 !left-4"
         />
-        <MiniMap
-          nodeColor={(node) => {
-            const status = (node.data as any)?.status;
-            if (status === 'ANOMALY_CRASH' || status === 'ANOMALY_500') return '#f43f5e';
-            if (status === 'ANOMALY_DEAD_END') return '#f59e0b';
-            return '#3f3f46';
-          }}
-          maskColor="rgba(9, 9, 11, 0.85)"
-          className="!bottom-4 !right-4 !bg-zinc-900 !border !border-zinc-800 !rounded-md"
-        />
+        {showMiniMap ? (
+          <div className="absolute bottom-4 right-4 z-20 bg-zinc-950/95 border border-zinc-800 rounded-lg p-2 shadow-2xl backdrop-blur-md flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 px-1 border-b border-zinc-800 pb-1">
+              <span className="flex items-center gap-1 font-semibold text-zinc-300">
+                <MapIcon className="w-3 h-3 text-zinc-400" />
+                <span>OVERVIEW_MINIMAP</span>
+              </span>
+              <button
+                onClick={() => setShowMiniMap(false)}
+                className="text-zinc-500 hover:text-zinc-300 p-0.5 rounded cursor-pointer"
+                title="Hide MiniMap"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+            <MiniMap
+              nodeColor={(node) => {
+                const status = (node.data as any)?.status;
+                if (status === 'ANOMALY_CRASH' || status === 'ANOMALY_500') return '#f43f5e';
+                if (status === 'ANOMALY_DEAD_END') return '#f59e0b';
+                return '#10b981';
+              }}
+              maskColor="rgba(9, 9, 11, 0.75)"
+              className="!static !m-0 !w-44 !h-28 !bg-zinc-900/90 !border !border-zinc-800/80 !rounded"
+            />
+          </div>
+        ) : (
+          <div className="absolute bottom-4 right-4 z-20">
+            <button
+              onClick={() => setShowMiniMap(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 rounded-md text-[11px] font-mono text-zinc-400 hover:text-zinc-200 transition-all shadow-lg backdrop-blur cursor-pointer"
+              title="Open Overview MiniMap"
+            >
+              <MapIcon className="w-3.5 h-3.5 text-zinc-400" />
+              <span>MiniMap</span>
+            </button>
+          </div>
+        )}
       </ReactFlow>
         </>
       )}
