@@ -1,0 +1,26 @@
+import { NextResponse } from 'next/server';
+import { runCrawl } from '@/lib/crawler/crawler-engine';
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    const targetUrl = body.targetUrl || 'http://localhost:3000/demo-app';
+
+    // Extract base URL from request headers if available
+    const host = request.headers.get('host') || 'localhost:3000';
+    const protocol = host.includes('localhost') ? 'http' : 'https';
+    const baseUrl = `${protocol}://${host}`;
+
+    const report = await runCrawl({
+      targetUrl,
+      baseUrl,
+    });
+
+    return NextResponse.json(report);
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: 'Autonomous scan failure: ' + (err?.message || err) },
+      { status: 500 }
+    );
+  }
+}

@@ -1,0 +1,221 @@
+import { CrawlReport, StateNode, StateEdge, Anomaly, ActionEvent } from '../types';
+
+export const FALLBACK_NODES: StateNode[] = [
+  {
+    id: 'state_home',
+    type: 'stateNode',
+    position: { x: 50, y: 180 },
+    data: {
+      label: 'Store Catalog',
+      route: '/demo-app',
+      pageTitle: 'NovaStore | High-Performance Gear',
+      landmarks: ['Featured Catalog', 'Precision gear engineered for focus', 'NovaStore'],
+      interactiveCount: 12,
+      status: 'HEALTHY',
+    },
+  },
+  {
+    id: 'state_forgot_password',
+    type: 'stateNode',
+    position: { x: 420, y: 40 },
+    data: {
+      label: 'Forgot Password',
+      route: '/demo-app/forgot-password',
+      pageTitle: 'NovaStore | Account Recovery',
+      landmarks: ['AUTH_RECOVERY_DISABLED', 'ERR_AUTH_RECOVERY_UNCONFIGURED'],
+      interactiveCount: 0,
+      isDeadEnd: true,
+      status: 'ANOMALY_DEAD_END',
+      anomalyId: 'anom_dead_end_1',
+    },
+  },
+  {
+    id: 'state_cart',
+    type: 'stateNode',
+    position: { x: 420, y: 320 },
+    data: {
+      label: 'Shopping Cart',
+      route: '/demo-app/cart',
+      pageTitle: 'NovaStore | Cart',
+      landmarks: ['Shopping Cart', 'Order Summary', 'Promo Code'],
+      interactiveCount: 6,
+      hasCrash: true,
+      status: 'ANOMALY_CRASH',
+      anomalyId: 'anom_crash_1',
+    },
+  },
+  {
+    id: 'state_checkout',
+    type: 'stateNode',
+    position: { x: 780, y: 320 },
+    data: {
+      label: 'Checkout Form',
+      route: '/demo-app/checkout',
+      pageTitle: 'NovaStore | Checkout & Dispatch',
+      landmarks: ['Shipping Address', 'Payment Details', 'Complete Purchase'],
+      interactiveCount: 5,
+      hasServerError: true,
+      status: 'ANOMALY_500',
+      anomalyId: 'anom_500_1',
+    },
+  },
+];
+
+export const FALLBACK_EDGES: StateEdge[] = [
+  {
+    id: 'edge_home_forgot',
+    source: 'state_home',
+    target: 'state_forgot_password',
+    label: 'Click "Forgot password?"',
+    animated: true,
+    style: { stroke: '#f59e0b', strokeWidth: 2 },
+    data: { action: 'click', selector: '#link-forgot-password', isFailure: true },
+  },
+  {
+    id: 'edge_home_cart',
+    source: 'state_home',
+    target: 'state_cart',
+    label: 'Click "Go to Cart"',
+    animated: false,
+    style: { stroke: '#52525b', strokeWidth: 1.5 },
+    data: { action: 'click', selector: '#nav-cart-btn' },
+  },
+  {
+    id: 'edge_cart_checkout',
+    source: 'state_cart',
+    target: 'state_checkout',
+    label: 'Click "Proceed to Checkout"',
+    animated: false,
+    style: { stroke: '#52525b', strokeWidth: 1.5 },
+    data: { action: 'click', selector: '#btn-proceed-checkout' },
+  },
+];
+
+export const FALLBACK_ANOMALIES: Anomaly[] = [
+  {
+    id: 'anom_crash_1',
+    type: 'CLIENT_CRASH',
+    severity: 'CRITICAL',
+    title: 'Unhandled Client Runtime Crash (TypeError)',
+    route: '/demo-app/cart',
+    selector: '#btn-apply-promo',
+    summary: 'Uncaught TypeError: Cannot read properties of undefined (reading \'calculateDiscount\')',
+    explanation: 'A client-side JavaScript execution failure broke the browser thread. The promo code button handler attempted to invoke a method on an undefined object without null checking.',
+    evidence: {
+      type: 'CLIENT_CRASH',
+      url: '/demo-app/cart',
+      triggerAction: 'Click button[id="btn-apply-promo"]',
+      targetSelector: '#btn-apply-promo',
+      errorMessage: "Uncaught TypeError: Cannot read properties of undefined (reading 'calculateDiscount')",
+      stackTrace: `TypeError: Cannot read properties of undefined (reading 'calculateDiscount')
+    at handleApplyPromo (app/demo-app/cart/page.tsx:48:42)
+    at HTMLButtonElement.dispatch (react-dom.production.min.js:14:1024)
+    at invokePassiveEffectCreate (react-dom.production.min.js:19:321)`,
+      stateId: 'state_cart',
+      stateName: 'Shopping Cart',
+      breadcrumbs: [
+        { step: 1, action: 'navigate', url: '/demo-app', timestamp: 1200 },
+        { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart (1)', timestamp: 2800 },
+        { step: 3, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: 4100 },
+        { step: 4, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: 4800 },
+      ],
+    },
+    timestamp: Date.now() - 120000,
+  },
+  {
+    id: 'anom_500_1',
+    type: 'SERVER_ERROR',
+    severity: 'CRITICAL',
+    title: 'HTTP 500 Internal Server Error (Database Deadlock)',
+    route: '/demo-app/checkout',
+    selector: '#btn-complete-purchase',
+    summary: 'HTTP 500 Internal Server Error: Database transaction deadlocked on null postal_code',
+    explanation: 'The checkout transaction endpoint returned a 500 internal server error upon receiving postal code "00000". The frontend did not display an error banner, leaving the checkout submit button permanently in a loading state.',
+    evidence: {
+      type: 'SERVER_ERROR',
+      url: '/api/mock-target/checkout',
+      triggerAction: 'POST /api/mock-target/checkout',
+      targetSelector: '#btn-complete-purchase',
+      requestPayload: {
+        postalCode: '00000',
+        name: 'Alex Mercer',
+        email: 'alex@novastore.internal',
+      },
+      responseStatus: 500,
+      responseBody: JSON.stringify({
+        error: 'Database transaction deadlocked on null postal_code',
+        code: 'ERR_DB_DEADLOCK_POSTAL',
+        table: 'orders_fulfillment_v2',
+      }),
+      stateId: 'state_checkout',
+      stateName: 'Checkout Form',
+      breadcrumbs: [
+        { step: 1, action: 'navigate', url: '/demo-app', timestamp: 1200 },
+        { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 2400 },
+        { step: 3, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: 3600 },
+        { step: 4, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: 4900 },
+        { step: 5, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: 6200 },
+      ],
+    },
+    timestamp: Date.now() - 60000,
+  },
+  {
+    id: 'anom_dead_end_1',
+    type: 'DEAD_END',
+    severity: 'WARNING',
+    title: 'Dead-End Navigation Trap (Zero Outbound Links)',
+    route: '/demo-app/forgot-password',
+    selector: '#link-forgot-password',
+    summary: 'Terminal view renders 0 interactive elements with no navigation links, home button, or return path.',
+    explanation: 'The user navigated from the login modal into the password recovery view. The target page renders an isolated error card with zero outbound interactive elements, stranding the user.',
+    evidence: {
+      type: 'DEAD_END',
+      url: '/demo-app/forgot-password',
+      triggerAction: 'Click a[href="/demo-app/forgot-password"]',
+      targetSelector: '#link-forgot-password',
+      stateId: 'state_forgot_password',
+      stateName: 'Forgot Password Trap',
+      breadcrumbs: [
+        { step: 1, action: 'navigate', url: '/demo-app', timestamp: 1000 },
+        { step: 2, action: 'click', selector: '#btn-account-modal', targetText: 'Sign In', timestamp: 2100 },
+        { step: 3, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: 3300 },
+      ],
+    },
+    timestamp: Date.now() - 180000,
+  },
+];
+
+export const FALLBACK_ACTION_LOG: ActionEvent[] = [
+  { id: 'log_1', timestamp: '00:00.82', level: 'INFO', message: 'ENGINE INITIALIZED: Chromium viewport 1280x800' },
+  { id: 'log_2', timestamp: '00:01.35', level: 'ACTION', message: 'NAVIGATE: /demo-app' },
+  { id: 'log_3', timestamp: '00:01.90', level: 'INFO', message: 'STATE DISCOVERED: Store Catalog (12 interactive targets)' },
+  { id: 'log_4', timestamp: '00:02.40', level: 'ACTION', message: 'CLICK: button#btn-account-modal ["Sign In"]' },
+  { id: 'log_5', timestamp: '00:03.15', level: 'ACTION', message: 'CLICK: a#link-forgot-password ["Forgot password?"]' },
+  { id: 'log_6', timestamp: '00:03.80', level: 'ERROR', message: '🟠 ANOMALY [DEAD_END]: /demo-app/forgot-password (0 outbound links detected)' },
+  { id: 'log_7', timestamp: '00:04.40', level: 'ACTION', message: 'NAVIGATE: /demo-app/cart' },
+  { id: 'log_8', timestamp: '00:04.95', level: 'INFO', message: 'STATE DISCOVERED: Shopping Cart (6 interactive targets)' },
+  { id: 'log_9', timestamp: '00:05.40', level: 'ACTION', message: 'INPUT: #promo-code-input ["CRASH"]' },
+  { id: 'log_10', timestamp: '00:05.85', level: 'ACTION', message: 'CLICK: button#btn-apply-promo ["Apply"]' },
+  { id: 'log_11', timestamp: '00:06.12', level: 'ERROR', message: '🔴 RUNTIME EXCEPTION: TypeError: Cannot read properties of undefined (reading \'calculateDiscount\') at cart/page.tsx:48' },
+  { id: 'log_12', timestamp: '00:06.70', level: 'ACTION', message: 'CLICK: a#btn-proceed-checkout ["Proceed to Checkout"]' },
+  { id: 'log_13', timestamp: '00:07.30', level: 'INFO', message: 'STATE DISCOVERED: Checkout Form (5 interactive targets)' },
+  { id: 'log_14', timestamp: '00:08.10', level: 'ACTION', message: 'INPUT: #checkout-postal-code ["00000"]' },
+  { id: 'log_15', timestamp: '00:08.75', level: 'ACTION', message: 'CLICK: button#btn-complete-purchase ["Complete Purchase"]' },
+  { id: 'log_16', timestamp: '00:09.15', level: 'NETWORK', message: 'POST /api/mock-target/checkout -> HTTP 500 Internal Server Error' },
+  { id: 'log_17', timestamp: '00:09.22', level: 'ERROR', message: '🔴 SERVER FAILURE: Database deadlock on postal_code "00000"' },
+  { id: 'log_18', timestamp: '00:09.80', level: 'INFO', message: 'SCAN COMPLETED: 4 States Mapped, 7 Actions Tracked, 3 Anomalies Detected' },
+];
+
+export function getFallbackReport(targetUrl: string = 'http://localhost:3000/demo-app'): CrawlReport {
+  return {
+    targetUrl,
+    scanDurationMs: 9800,
+    statesCount: 4,
+    transitionsCount: 3,
+    nodes: FALLBACK_NODES,
+    edges: FALLBACK_EDGES,
+    anomalies: FALLBACK_ANOMALIES,
+    actionLog: FALLBACK_ACTION_LOG,
+    mode: 'DETERMINISTIC_ENGINE',
+  };
+}
