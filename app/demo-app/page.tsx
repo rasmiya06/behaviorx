@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ShoppingBag, User, Search, Check, ShieldCheck, X, LogOut, CheckCircle } from 'lucide-react';
+import { ShoppingBag, Search, Check, ShieldCheck, LogOut, ArrowRight, Lock, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface Product {
   id: string;
@@ -53,65 +53,68 @@ const PRODUCTS: Product[] = [
   },
 ];
 
-export default function NovaStorePage() {
+export default function NovaStoreApp() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [cartCount, setCartCount] = useState(0);
   const [addedIds, setAddedIds] = useState<string[]>([]);
-  const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Authentication State
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
-  const [loginEmailInput, setLoginEmailInput] = useState('alex@novastore.internal');
-  const [loginPasswordInput, setLoginPasswordInput] = useState('password123');
-  const [loginSuccessAlert, setLoginSuccessAlert] = useState(false);
+  // Sign In Form States
+  const [loginEmail, setLoginEmail] = useState('alex@novastore.internal');
+  const [loginPassword, setLoginPassword] = useState('password123');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('novastore_cart');
-      if (saved) {
-        const items = JSON.parse(saved);
-        setCartCount(Array.isArray(items) ? items.length : 0);
-      }
-      const savedAuth = localStorage.getItem('novastore_user');
-      if (savedAuth) {
-        const user = JSON.parse(savedAuth);
-        if (user?.email) {
+      const savedUser = localStorage.getItem('novastore_user');
+      if (savedUser) {
+        const u = JSON.parse(savedUser);
+        if (u?.email) {
           setIsLoggedIn(true);
-          setUserEmail(user.email);
         }
       }
-    } catch (e) {
-      // ignore
-    }
+      const savedCart = localStorage.getItem('novastore_cart');
+      if (savedCart) {
+        const items = JSON.parse(savedCart);
+        setCartCount(Array.isArray(items) ? items.length : 0);
+      }
+    } catch (e) {}
   }, []);
 
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginEmailInput || !loginPasswordInput) return;
+    setIsSubmitting(true);
+    setAuthError(null);
 
-    const userObj = {
-      email: loginEmailInput,
-      name: 'Alex Mercer',
-      sessionToken: 'tk_' + Math.random().toString(36).substring(2, 9),
-    };
-
-    localStorage.setItem('novastore_user', JSON.stringify(userObj));
-    setIsLoggedIn(true);
-    setUserEmail(loginEmailInput);
-    setLoginSuccessAlert(true);
+    if (!loginEmail || !loginPassword) {
+      setAuthError('Email and password are required.');
+      setIsSubmitting(false);
+      return;
+    }
 
     setTimeout(() => {
-      setLoginSuccessAlert(false);
-      setIsLoginOpen(false);
-    }, 800);
+      const user = {
+        email: loginEmail,
+        name: 'Alex Mercer',
+        token: 'auth_' + Math.random().toString(36).substring(2, 9),
+      };
+
+      try {
+        localStorage.setItem('novastore_user', JSON.stringify(user));
+      } catch (e) {}
+
+      setIsSubmitting(false);
+      setIsLoggedIn(true);
+    }, 400);
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('novastore_user');
+    try {
+      localStorage.removeItem('novastore_user');
+    } catch (e) {}
     setIsLoggedIn(false);
-    setUserEmail('');
   };
 
   const handleAddToCart = (product: Product) => {
@@ -136,18 +139,107 @@ export default function NovaStorePage() {
     return matchesCat && matchesSearch;
   });
 
+  // ========================================================
+  // 1. FIRST PAGE: SIGN IN PAGE (WHEN NOT LOGGED IN)
+  // ========================================================
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col justify-center items-center p-4">
+        {/* Top Header */}
+        <div className="mb-6 text-center">
+          <div className="w-10 h-10 rounded-lg bg-zinc-100 text-zinc-950 font-black flex items-center justify-center text-base tracking-tighter mx-auto mb-3 shadow-md">
+            NV
+          </div>
+          <h1 className="text-xl font-bold tracking-tight text-zinc-100">NovaStore Gate</h1>
+          <p className="text-xs text-zinc-400 mt-1 font-mono">
+            First Page: Sign in to access your store catalog and cart
+          </p>
+        </div>
+
+        {/* Login Card */}
+        <div className="w-full max-w-sm bg-zinc-900/90 border border-zinc-800 rounded-xl p-6 shadow-2xl backdrop-blur">
+          <form onSubmit={handleLoginSubmit} className="space-y-4">
+            {authError && (
+              <div className="p-2.5 bg-rose-950/40 border border-rose-800 rounded text-xs font-mono text-rose-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+                Email Address
+              </label>
+              <input
+                id="login-email-input"
+                name="email"
+                type="email"
+                required
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="alex@novastore.internal"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-700"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1.5">
+                <label className="text-xs font-mono text-zinc-400">Password</label>
+                {/* BUG 1: Dead End navigation link */}
+                <Link
+                  id="link-forgot-password"
+                  href="/demo-app/forgot-password"
+                  className="text-xs text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+              <input
+                id="login-password-input"
+                name="password"
+                type="password"
+                required
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="password123"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-700"
+              />
+            </div>
+
+            <button
+              id="btn-submit-login"
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full py-2.5 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50 text-zinc-950 font-semibold text-xs font-mono rounded flex items-center justify-center gap-2 transition-colors cursor-pointer mt-2"
+            >
+              <span>{isSubmitting ? 'Authenticating...' : 'Sign In to Store'}</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </form>
+
+          <div className="mt-4 pt-4 border-t border-zinc-800 text-[10px] font-mono text-zinc-500 text-center">
+            Demo Credentials: <code>alex@novastore.internal</code> / <code>password123</code>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================================================
+  // 2. NEXT PAGE: STORE CATALOG (ONLY UNLOCKED ONCE SIGNED IN)
+  // ========================================================
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       {/* Top Banner */}
-      <div className="bg-zinc-900 border-b border-zinc-800 text-xs px-4 py-1.5 flex justify-between items-center text-zinc-400">
+      <div className="bg-zinc-900 border-b border-zinc-800 text-xs px-4 py-1.5 flex justify-between items-center text-zinc-400 font-mono">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>NovaStore Demo Target • Connected to BehaviorX Monitoring</span>
+          <span>AUTHENTICATED: Alex Mercer (alex@novastore.internal)</span>
         </div>
         <div className="hidden sm:flex gap-4">
-          <span>Same-day dispatch</span>
+          <span>Session Active</span>
           <span>•</span>
-          <span>Encrypted checkout</span>
+          <span>BehaviorX Connected</span>
         </div>
       </div>
 
@@ -191,30 +283,19 @@ export default function NovaStorePage() {
               />
             </div>
 
-            {/* Authentication Button / User Profile */}
-            {isLoggedIn ? (
-              <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-md px-2.5 py-1 text-xs">
-                <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
-                <span className="text-zinc-200 font-mono">Alex M.</span>
-                <button
-                  id="btn-logout"
-                  onClick={handleLogout}
-                  title="Sign out"
-                  className="text-zinc-400 hover:text-rose-400 ml-1 p-0.5"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ) : (
+            {/* Authenticated Profile with Sign Out */}
+            <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-md px-2.5 py-1 text-xs">
+              <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
+              <span className="text-zinc-200 font-mono text-[11px]">Alex M.</span>
               <button
-                id="btn-account-modal"
-                onClick={() => setIsLoginOpen(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-300 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-md transition-colors"
+                id="btn-logout"
+                onClick={handleLogout}
+                title="Sign out back to login page"
+                className="text-zinc-400 hover:text-rose-400 ml-1 p-0.5"
               >
-                <User className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Sign In</span>
+                <LogOut className="w-3.5 h-3.5" />
               </button>
-            )}
+            </div>
 
             <Link
               id="nav-cart-btn"
@@ -236,14 +317,14 @@ export default function NovaStorePage() {
         <div className="max-w-6xl mx-auto px-4">
           <div className="max-w-2xl">
             <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-zinc-800 bg-zinc-900 text-[11px] text-zinc-400 mb-3 font-mono">
-              <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
-              <span>VERIFIED PRODUCTION SIMULATION</span>
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>AUTHENTICATED CATALOG UNLOCKED</span>
             </div>
             <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-zinc-100 mb-3">
               Precision gear engineered for focus.
             </h1>
             <p className="text-zinc-400 text-sm leading-relaxed mb-6">
-              Browse tactile hardware, high-refresh displays, and ergonomic workspaces. Designed for developers and architects.
+              You are signed in as Alex Mercer. Explore hardware, cart discounts, and checkout.
             </p>
             <div className="flex items-center gap-3">
               <Link
@@ -324,78 +405,6 @@ export default function NovaStorePage() {
           })}
         </div>
       </main>
-
-      {/* Working Login Modal */}
-      {isLoginOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg max-w-sm w-full p-6 shadow-2xl relative">
-            <button
-              id="close-login-modal"
-              onClick={() => setIsLoginOpen(false)}
-              className="absolute right-4 top-4 text-zinc-500 hover:text-zinc-300"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <h3 className="text-base font-semibold text-zinc-100 mb-1">Account Login</h3>
-            <p className="text-xs text-zinc-400 mb-4">Sign in with demo credentials to sync orders.</p>
-
-            {loginSuccessAlert ? (
-              <div className="p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-lg text-center text-xs font-mono text-emerald-400 flex items-center justify-center gap-2">
-                <CheckCircle className="w-4 h-4" />
-                <span>Signed in as {loginEmailInput}!</span>
-              </div>
-            ) : (
-              <form onSubmit={handleLoginSubmit} className="space-y-3">
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">Email</label>
-                  <input
-                    id="login-email-input"
-                    name="email"
-                    type="email"
-                    required
-                    value={loginEmailInput}
-                    onChange={(e) => setLoginEmailInput(e.target.value)}
-                    placeholder="alex@novastore.internal"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-                  />
-                </div>
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs text-zinc-400">Password</label>
-                    {/* BUG 1 TRIGGER: Navigates to dead end page */}
-                    <Link
-                      id="link-forgot-password"
-                      href="/demo-app/forgot-password"
-                      className="text-xs text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-                    >
-                      Forgot password?
-                    </Link>
-                  </div>
-                  <input
-                    id="login-password-input"
-                    name="password"
-                    type="password"
-                    required
-                    value={loginPasswordInput}
-                    onChange={(e) => setLoginPasswordInput(e.target.value)}
-                    placeholder="password123"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-                  />
-                </div>
-
-                <button
-                  id="btn-submit-login"
-                  type="submit"
-                  className="w-full mt-2 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold text-xs rounded transition-colors"
-                >
-                  Sign In
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
