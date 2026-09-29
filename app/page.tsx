@@ -14,41 +14,42 @@ import {
   Anomaly,
   ActionEvent,
 } from '@/lib/types';
-import { AlertCircle, X, ArrowRight, ShieldCheck, Lock, LogOut } from 'lucide-react';
+import { AlertCircle, X, ArrowRight, ShieldCheck, Lock } from 'lucide-react';
 
 export default function BehaviorXDashboard() {
-  // BEHAVIORX PLATFORM AUTHENTICATION STATE (FIRST PAGE IS SIGN IN)
+  // 1. BEHAVIORX PLATFORM AUTHENTICATION (FIRST PAGE IS ALWAYS SIGN IN ON NEW SESSION)
   const [isPlatformLoggedIn, setIsPlatformLoggedIn] = useState(false);
   const [platformUserEmail, setPlatformUserEmail] = useState('engineer@behaviorx.dev');
   const [platformPassword, setPlatformPassword] = useState('behaviorx2024');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
-  // DASHBOARD STATE
+  // 2. DASHBOARD CRAWLER STATE
   const [targetUrl, setTargetUrl] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState<'IDLE' | 'SCANNING' | 'COMPLETED' | 'ERROR'>('IDLE');
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // TARGET WEBSITE AUTHENTICATION / SIGN IN CONFIGURATION IN FRONT
+  // 3. TARGET AUTH CREDENTIALS CONFIGURATION
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [enableAuth, setEnableAuth] = useState(false);
 
-  // CLEAN ZERO-STATE (0 nodes, 0 edges, 0 anomalies, 0 logs)
+  // 4. CLEAN ZERO-STATE
   const [nodes, setNodes] = useState<StateNode[]>([]);
   const [edges, setEdges] = useState<StateEdge[]>([]);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
   const [logs, setLogs] = useState<ActionEvent[]>([]);
 
-  // Inspector & Replay states
+  // 5. INSPECTION & REPLAY STATE
   const [selectedAnomaly, setSelectedAnomaly] = useState<Anomaly | null>(null);
   const [replayAnomaly, setReplayAnomaly] = useState<Anomaly | null>(null);
 
+  // Check session storage on mount
   useEffect(() => {
     try {
-      const savedAuth = localStorage.getItem('bx_auth');
-      if (savedAuth) {
-        const u = JSON.parse(savedAuth);
+      const session = sessionStorage.getItem('bx_session');
+      if (session) {
+        const u = JSON.parse(session);
         if (u?.email) {
           setIsPlatformLoggedIn(true);
           setPlatformUserEmail(u.email);
@@ -63,8 +64,8 @@ export default function BehaviorXDashboard() {
 
     setTimeout(() => {
       try {
-        localStorage.setItem(
-          'bx_auth',
+        sessionStorage.setItem(
+          'bx_session',
           JSON.stringify({
             email: platformUserEmail,
             name: 'Principal QA Engineer',
@@ -80,18 +81,18 @@ export default function BehaviorXDashboard() {
 
   const handlePlatformLogout = () => {
     try {
-      localStorage.removeItem('bx_auth');
+      sessionStorage.removeItem('bx_session');
     } catch (e) {}
     setIsPlatformLoggedIn(false);
   };
 
-  // Trigger real autonomous crawl
+  // Trigger universal autonomous crawl
   const handleStartScan = async () => {
     setValidationError(null);
 
     const cleanUrl = (targetUrl || '').trim();
     if (!cleanUrl) {
-      setValidationError('Please enter a website URL to scan (e.g. https://example.com or click "Load NovaStore").');
+      setValidationError('Please enter a website URL to scan (e.g. https://news.ycombinator.com or http://localhost:3000/demo-app).');
       return;
     }
 
@@ -100,7 +101,7 @@ export default function BehaviorXDashboard() {
         new URL(`https://${cleanUrl}`);
       }
     } catch {
-      setValidationError(`Invalid URL format: "${cleanUrl}". Please enter a valid HTTP or HTTPS address.`);
+      setValidationError(`Invalid URL format: "${cleanUrl}". Please enter a valid web address.`);
       return;
     }
 
@@ -173,7 +174,7 @@ export default function BehaviorXDashboard() {
   };
 
   // ========================================================
-  // 1. FIRST PAGE: BEHAVIORX SIGN IN PAGE (WHEN NOT LOGGED IN)
+  // 1. FIRST PAGE: SIGN IN PAGE (WHEN NOT LOGGED IN)
   // ========================================================
   if (!isPlatformLoggedIn) {
     return (
@@ -242,43 +243,30 @@ export default function BehaviorXDashboard() {
   }
 
   // ========================================================
-  // 2. NEXT PAGE: BEHAVIORX EXPLORER DASHBOARD (UNLOCKED ONCE SIGNED IN)
+  // 2. NEXT PAGE: CLEAN, SPACIOUS EXPLORER DASHBOARD
   // ========================================================
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 font-sans">
-      {/* Top Navigation with Sign Out */}
-      <div className="relative">
-        <TopNav
-          url={targetUrl}
-          setUrl={(val) => {
-            setTargetUrl(val);
-            if (validationError) setValidationError(null);
-          }}
-          isScanning={isScanning}
-          onStartScan={handleStartScan}
-          status={scanStatus}
-          anomaliesCount={anomalies.length}
-          authEmail={authEmail}
-          setAuthEmail={setAuthEmail}
-          authPassword={authPassword}
-          setAuthPassword={setAuthPassword}
-          enableAuth={enableAuth}
-          setEnableAuth={setEnableAuth}
-        />
-
-        {/* BehaviorX Account Badge with Sign Out */}
-        <div className="absolute right-48 top-3 hidden xl:flex items-center gap-2 bg-zinc-900 border border-zinc-800 px-2.5 py-1 rounded text-xs font-mono text-zinc-300 z-40">
-          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-          <span className="truncate max-w-[130px]">{platformUserEmail}</span>
-          <button
-            onClick={handlePlatformLogout}
-            title="Sign out of BehaviorX"
-            className="text-zinc-500 hover:text-rose-400 ml-1 p-0.5 transition-colors"
-          >
-            <LogOut className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
+      {/* Top Navigation */}
+      <TopNav
+        url={targetUrl}
+        setUrl={(val) => {
+          setTargetUrl(val);
+          if (validationError) setValidationError(null);
+        }}
+        isScanning={isScanning}
+        onStartScan={handleStartScan}
+        status={scanStatus}
+        anomaliesCount={anomalies.length}
+        authEmail={authEmail}
+        setAuthEmail={setAuthEmail}
+        authPassword={authPassword}
+        setAuthPassword={setAuthPassword}
+        enableAuth={enableAuth}
+        setEnableAuth={setEnableAuth}
+        userEmail={platformUserEmail}
+        onLogout={handlePlatformLogout}
+      />
 
       {/* Validation Error Banner */}
       {validationError && (
