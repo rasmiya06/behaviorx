@@ -196,7 +196,7 @@ export function TopNav({
             )}
           </div>
 
-          {/* Clean URL Input (Starts Empty or with Placeholder) */}
+          {/* Clean Universal URL Input */}
           <div className="relative flex-1 flex items-center">
             <Globe className="w-3.5 h-3.5 absolute left-3 text-zinc-500" />
             <input
@@ -205,16 +205,37 @@ export function TopNav({
               onChange={(e) => setUrl(e.target.value)}
               disabled={isScanning}
               placeholder="Enter any website URL (e.g. https://example.com)..."
-              className="w-full bg-zinc-900/90 border border-zinc-800 rounded-md pl-9 pr-24 py-1.5 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-700 transition-colors disabled:opacity-50"
+              className="w-full bg-zinc-900/90 border border-zinc-800 rounded-md pl-9 pr-3 py-1.5 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-700 transition-colors disabled:opacity-50"
             />
-            <button
-              onClick={handleLoadSample}
-              type="button"
-              className="absolute right-2 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-800/80 hover:bg-zinc-800 px-2 py-0.5 rounded transition-colors"
-              title="Quickly fill NovaStore demo testbed"
+          </div>
+
+          {/* Quick Real Websites Preset Dropdown */}
+          <div className="relative">
+            <select
+              onChange={(e) => {
+                const val = e.target.value;
+                if (!val) return;
+                setUrl(val);
+                if (val.includes('demo-app')) {
+                  setAuthEmail('alex@novastore.internal');
+                  setAuthPassword('password123');
+                  setEnableAuth(true);
+                } else if (val.includes('quotes.toscrape.com')) {
+                  setAuthEmail('admin');
+                  setAuthPassword('admin');
+                  setEnableAuth(true);
+                }
+              }}
+              value=""
+              className="h-8 px-2 bg-zinc-900 border border-zinc-800 rounded-md text-xs font-mono text-zinc-400 hover:text-zinc-200 focus:outline-none focus:border-zinc-700 cursor-pointer"
+              title="Select a sample real website to test"
             >
-              Load NovaStore
-            </button>
+              <option value="" disabled>Samples ▾</option>
+              <option value="https://example.com">example.com (Clean)</option>
+              <option value="https://news.ycombinator.com">news.ycombinator.com (HN)</option>
+              <option value="https://quotes.toscrape.com">quotes.toscrape.com (Login Site)</option>
+              <option value="http://localhost:3000/demo-app">NovaStore (3 Bugs Demo)</option>
+            </select>
           </div>
 
           {url && (
