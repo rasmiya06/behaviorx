@@ -1,10 +1,18 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Lock, ShieldCheck, Loader2, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Lock, ShieldCheck, Loader2, CheckCircle2, ShoppingBag } from 'lucide-react';
+
+interface CartItem {
+  id: string;
+  name: string;
+  price: number;
+  category?: string;
+}
 
 export default function CheckoutPage() {
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [formData, setFormData] = useState({
     name: 'Alex Mercer',
     email: 'alex@novastore.internal',
@@ -16,6 +24,28 @@ export default function CheckoutPage() {
     expDate: '12/28',
     cvv: '912',
   });
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('novastore_cart');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCartItems(parsed);
+          return;
+        }
+      }
+      setCartItems([
+        { id: 'prod-1', name: 'Apex Mechanical Keyboard v2', price: 189, category: 'Hardware' }
+      ]);
+    } catch (e) {
+      setCartItems([]);
+    }
+  }, []);
+
+  const subtotal = cartItems.reduce((acc, item) => acc + (item.price || 0), 0);
+  const tax = Math.round(subtotal * 0.08);
+  const total = subtotal + tax;
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
@@ -201,6 +231,29 @@ export default function CheckoutPage() {
             </div>
           </div>
 
+          {/* Order Summary Breakdown */}
+          <div className="p-5 bg-zinc-900/50 border border-zinc-800/80 rounded-lg space-y-3 font-mono text-xs">
+            <div className="flex items-center justify-between text-zinc-400 pb-2 border-b border-zinc-800 text-[11px] uppercase tracking-wider">
+              <span className="flex items-center gap-1.5">
+                <ShoppingBag className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Manifest ({cartItems.length} {cartItems.length === 1 ? 'item' : 'items'})</span>
+              </span>
+              <span>Subtotal: ${subtotal}</span>
+            </div>
+            <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              {cartItems.map((item, idx) => (
+                <div key={`${item.id}-${idx}`} className="flex justify-between items-center text-zinc-300">
+                  <span className="truncate max-w-[280px]">{item.name}</span>
+                  <span className="text-zinc-400">${item.price}</span>
+                </div>
+              ))}
+            </div>
+            <div className="pt-2 border-t border-zinc-800 flex justify-between text-zinc-100 font-semibold text-sm">
+              <span>Total Due (incl. 8% tax)</span>
+              <span>${total}</span>
+            </div>
+          </div>
+
           {/* Submit Button */}
           <div>
             <button
@@ -215,7 +268,7 @@ export default function CheckoutPage() {
                   <span className="font-mono">AUTHORIZING_TRANSACTION...</span>
                 </>
               ) : (
-                <span>Complete Purchase ($204.00)</span>
+                <span>Complete Purchase (${total})</span>
               )}
             </button>
             <p className="text-[11px] text-zinc-500 text-center mt-2 font-mono">
