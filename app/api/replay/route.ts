@@ -5,6 +5,8 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const anomalyId = body.anomalyId || 'anom_500_1';
+    const anomaly = body.anomaly;
+    const breadcrumbs = body.breadcrumbs;
 
     // Extract base URL from request headers
     const host = request.headers.get('host') || 'localhost:3000';
@@ -13,6 +15,8 @@ export async function POST(request: Request) {
 
     const steps = await executeDeterministicReplay({
       anomalyId,
+      anomaly,
+      breadcrumbs,
       baseUrl,
     });
 

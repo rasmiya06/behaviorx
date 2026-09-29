@@ -42,7 +42,11 @@ export function ReplayModal({ anomaly, onClose }: ReplayModalProps) {
     fetch('/api/replay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ anomalyId: anomaly.id }),
+      body: JSON.stringify({
+        anomalyId: anomaly.id,
+        anomaly,
+        breadcrumbs: anomaly.evidence?.breadcrumbs || [],
+      }),
     })
       .then((res) => res.json())
       .then((data) => {

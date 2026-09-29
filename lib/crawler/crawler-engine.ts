@@ -2,7 +2,6 @@ import { chromium, Browser, Page } from 'playwright';
 import { CrawlReport, StateNode, StateEdge, Anomaly, ActionEvent, ActionBreadcrumb } from '../types';
 import { computeStateId, generateStateLabel } from './state-hasher';
 import { createAnomalyFromObservation, RawObservedEvent } from './anomaly-detector';
-import { getFallbackReport } from './fallback-telemetry';
 
 export interface CrawlerOptions {
   targetUrl: string;
@@ -33,10 +32,22 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
     }
   };
 
-  let targetUrl = options.targetUrl;
+  // 1. URL VALIDATION: Do not allow empty or invalid URLs
+  let rawUrl = (options.targetUrl || '').trim();
+  if (!rawUrl) {
+    throw new Error('Target URL cannot be empty. Please provide a valid URL.');
+  }
+
+  let targetUrl = rawUrl;
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
     const host = options.baseUrl || 'http://localhost:3000';
     targetUrl = `${host.replace(/\/$/, '')}${targetUrl.startsWith('/') ? '' : '/'}${targetUrl}`;
+  }
+
+  try {
+    new URL(targetUrl);
+  } catch {
+    throw new Error(`Invalid URL format: "${rawUrl}". Please provide a complete URL.`);
   }
 
   log('INFO', `INITIALIZING CRAWLER: Target URL = ${targetUrl}`);
@@ -44,7 +55,7 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
   let browser: Browser | null = null;
 
   try {
-    log('INFO', 'LAUNCHING HEADLESS BROWSER: Chromium (1280x800, sandboxed)');
+    log('INFO', 'LAUNCHING PLAYWRIGHT: Headless Chromium (1280x800)');
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
@@ -57,24 +68,22 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
 
     const page: Page = await context.newPage();
 
-    let runtimeErrors: string[] = [];
-    let network500s: { url: string; status: number; body?: string }[] = [];
+    let runtimeErrors: { message: string; stack?: string }[] = [];
+    let networkErrors: { url: string; status: number; body?: string }[] = [];
 
-    // Runtime exception listener
+    // Attach real runtime error listeners
     page.on('pageerror', (err) => {
       const msg = err.message || err.toString();
-      runtimeErrors.push(msg);
+      runtimeErrors.push({ message: msg, stack: err.stack });
       log('ERROR', `🔴 RUNTIME EXCEPTION: ${msg}`);
     });
 
-    // Console listener
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         log('ERROR', `CONSOLE ERROR: ${msg.text()}`);
       }
     });
 
-    // Network monitor
     page.on('response', async (res) => {
       const status = res.status();
       const url = res.url();
@@ -83,263 +92,292 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
         try {
           body = await res.text();
         } catch {}
-        network500s.push({ url, status, body });
+        networkErrors.push({ url, status, body });
         log('NETWORK', `🔴 HTTP ${status} ERROR: ${url}`);
       }
     });
 
-    // ========================================================
-    // FLOW 1: HOME CATALOG & DEAD END DISCOVERY
-    // ========================================================
-    log('ACTION', `NAVIGATE: ${targetUrl}`);
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await page.waitForTimeout(600);
+    // Helper: Analyze current page DOM and register StateNode
+    const registerCurrentState = async (posX: number, posY: number, breadcrumbs: ActionBreadcrumb[]) => {
+      const currentUrl = page.url();
+      let pageTitle = '';
+      try {
+        pageTitle = await page.title();
+      } catch {}
 
-    const homeTitle = await page.title();
-    const homeUrl = page.url();
-    const homeStateId = 'state_home';
+      // Extract headings as landmarks
+      const landmarks: string[] = await page.evaluate(() => {
+        const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'));
+        return headings.map((h) => (h.textContent || '').trim()).filter((t) => t.length > 0 && t.length < 50).slice(0, 4);
+      });
 
-    nodesMap.set(homeStateId, {
-      id: homeStateId,
-      type: 'stateNode',
-      position: { x: 50, y: 180 },
-      data: {
-        label: 'Store Catalog',
-        route: '/demo-app',
-        pageTitle: homeTitle,
-        landmarks: ['Featured Catalog', 'Precision gear engineered for focus', 'NovaStore'],
-        interactiveCount: 12,
-        status: 'HEALTHY',
-      },
-    });
+      // Extract interactive elements
+      const interactiveCount = await page.locator('a[href], button, input, select, textarea, [role="button"]').count();
 
-    log('INFO', `STATE DISCOVERED: Store Catalog (${homeUrl})`);
+      const parsedUrl = new URL(currentUrl);
+      const stateId = computeStateId(parsedUrl.pathname, landmarks);
+      const label = generateStateLabel(parsedUrl.pathname, pageTitle);
 
-    // Test Login Modal & Dead End
-    log('ACTION', 'CLICK: #btn-account-modal ["Sign In"]');
-    try {
-      await page.click('#btn-account-modal', { timeout: 3000 });
-      await page.waitForTimeout(400);
+      const isDeadEnd = interactiveCount === 0;
+      let status: StateNode['data']['status'] = 'HEALTHY';
+      if (isDeadEnd) status = 'ANOMALY_DEAD_END';
 
-      log('ACTION', 'CLICK: #link-forgot-password ["Forgot password?"]');
-      await page.click('#link-forgot-password', { timeout: 3000 });
-      await page.waitForTimeout(600);
-
-      const deadEndUrl = page.url();
-      const deadEndLinksCount = await page.locator('a, button, input[type="submit"]').count();
-
-      const deadEndStateId = 'state_forgot_password';
-      nodesMap.set(deadEndStateId, {
-        id: deadEndStateId,
+      const stateNode: StateNode = {
+        id: stateId,
         type: 'stateNode',
-        position: { x: 420, y: 40 },
+        position: { x: posX, y: posY },
         data: {
-          label: 'Forgot Password',
-          route: '/demo-app/forgot-password',
-          pageTitle: await page.title(),
-          landmarks: ['AUTH_RECOVERY_DISABLED', 'ERR_AUTH_RECOVERY_UNCONFIGURED'],
-          interactiveCount: deadEndLinksCount,
-          isDeadEnd: true,
-          status: 'ANOMALY_DEAD_END',
-          anomalyId: 'anom_dead_end_1',
+          label,
+          route: parsedUrl.pathname,
+          pageTitle,
+          landmarks,
+          interactiveCount,
+          isDeadEnd,
+          status,
         },
-      });
+      };
 
-      edgesMap.set('edge_home_forgot', {
-        id: 'edge_home_forgot',
-        source: homeStateId,
-        target: deadEndStateId,
-        label: 'Click "Forgot password?"',
-        animated: true,
-        style: { stroke: '#f59e0b', strokeWidth: 2 },
-        data: { action: 'click', selector: '#link-forgot-password', isFailure: true },
-      });
+      nodesMap.set(stateId, stateNode);
+      log('INFO', `STATE DISCOVERED: ${label} (${parsedUrl.pathname}) [${interactiveCount} interactive targets]`);
 
-      if (deadEndLinksCount === 0) {
-        log('ERROR', '🟠 ANOMALY [DEAD_END]: /demo-app/forgot-password has 0 outbound interactive links');
+      // Check Dead End Rule
+      if (isDeadEnd) {
+        log('ERROR', `🟠 ANOMALY [DEAD_END]: ${parsedUrl.pathname} renders 0 outbound interactive links`);
         anomalies.push(
           createAnomalyFromObservation({
             type: 'DEAD_END',
-            route: '/demo-app/forgot-password',
-            stateId: deadEndStateId,
-            stateName: 'Forgot Password Trap',
-            triggerAction: 'Click a[href="/demo-app/forgot-password"]',
-            targetSelector: '#link-forgot-password',
-            url: deadEndUrl,
-            breadcrumbs: [
-              { step: 1, action: 'navigate', url: targetUrl, timestamp: 1000 },
-              { step: 2, action: 'click', selector: '#btn-account-modal', targetText: 'Sign In', timestamp: 2100 },
-              { step: 3, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: 3300 },
-            ],
+            route: parsedUrl.pathname,
+            stateId,
+            stateName: label,
+            triggerAction: breadcrumbs[breadcrumbs.length - 1]?.action || 'navigate',
+            targetSelector: breadcrumbs[breadcrumbs.length - 1]?.selector,
+            url: currentUrl,
+            breadcrumbs: [...breadcrumbs],
           })
         );
       }
-    } catch (err: any) {
-      log('INFO', `Dead-end exploration bypassed: ${err.message}`);
+
+      return stateNode;
+    };
+
+    // ========================================================
+    // STEP 1: INITIAL VISIT TO TARGET URL
+    // ========================================================
+    log('ACTION', `NAVIGATE: ${targetUrl}`);
+    const rootBreadcrumbs: ActionBreadcrumb[] = [
+      { step: 1, action: 'navigate', url: targetUrl, timestamp: Date.now() - startTime },
+    ];
+
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForTimeout(600);
+
+    const rootNode = await registerCurrentState(50, 180, rootBreadcrumbs);
+
+    // ========================================================
+    // STEP 2: DISCOVER INTERACTIVE TARGETS ON ROOT PAGE
+    // ========================================================
+    // Check if account modal or login button exists
+    const hasAccountBtn = (await page.locator('#btn-account-modal, [data-testid="account"], button:has-text("Sign In"), a:has-text("Sign In")').count()) > 0;
+    if (hasAccountBtn) {
+      log('ACTION', 'CLICK: Sign In / Account Trigger');
+      try {
+        await page.click('#btn-account-modal, [data-testid="account"], button:has-text("Sign In"), a:has-text("Sign In")');
+        await page.waitForTimeout(400);
+
+        // Check for "Forgot password?" link (Bug 1 flow)
+        const hasForgotPassword = (await page.locator('#link-forgot-password, a:has-text("Forgot password")').count()) > 0;
+        if (hasForgotPassword) {
+          log('ACTION', 'CLICK: Forgot Password link');
+          const forgotBreadcrumbs: ActionBreadcrumb[] = [
+            ...rootBreadcrumbs,
+            { step: 2, action: 'click', selector: '#btn-account-modal', targetText: 'Sign In', timestamp: Date.now() - startTime },
+            { step: 3, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: Date.now() - startTime },
+          ];
+
+          await page.click('#link-forgot-password, a:has-text("Forgot password")');
+          await page.waitForTimeout(600);
+
+          const forgotNode = await registerCurrentState(420, 40, forgotBreadcrumbs);
+
+          edgesMap.set('edge_root_forgot', {
+            id: 'edge_root_forgot',
+            source: rootNode.id,
+            target: forgotNode.id,
+            label: 'Click "Forgot password?"',
+            animated: true,
+            style: { stroke: '#f59e0b', strokeWidth: 2 },
+            data: { action: 'click', selector: '#link-forgot-password', isFailure: true },
+          });
+
+          // Return to root page
+          await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+          await page.waitForTimeout(400);
+        }
+      } catch (err: any) {
+        log('INFO', `Account interaction handled: ${err.message}`);
+      }
     }
 
     // ========================================================
-    // FLOW 2: CART EXPLORATION & CLIENT CRASH (BUG 2)
+    // STEP 3: DISCOVER INTERNAL LINKS (e.g. Cart, Catalog)
     // ========================================================
-    const cartUrl = new URL('/demo-app/cart', targetUrl).toString();
-    log('ACTION', `NAVIGATE: ${cartUrl}`);
-    await page.goto(cartUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    await page.waitForTimeout(500);
+    const internalLinks = await page.evaluate((origin) => {
+      const anchors = Array.from(document.querySelectorAll('a[href]'));
+      const hrefs: { href: string; text: string; id?: string }[] = [];
+      for (const a of anchors) {
+        const h = a.getAttribute('href') || '';
+        if (h && (h.startsWith('/') || h.startsWith(origin)) && !h.startsWith('#') && !h.includes('forgot-password')) {
+          hrefs.push({ href: h, text: (a.textContent || '').trim(), id: a.id });
+        }
+      }
+      return hrefs;
+    }, new URL(targetUrl).origin);
 
-    const cartStateId = 'state_cart';
-    const cartTitle = await page.title();
+    // Visit cart or next major link
+    const cartLink = internalLinks.find((l) => l.href.includes('cart') || l.id === 'nav-cart-btn') || internalLinks[0];
 
-    log('INFO', `STATE DISCOVERED: Shopping Cart (${cartUrl})`);
+    if (cartLink) {
+      const nextUrl = new URL(cartLink.href, targetUrl).toString();
+      log('ACTION', `NAVIGATE: ${nextUrl} (${cartLink.text || 'Next View'})`);
 
-    // Attempt promo code calculation to trigger Bug 2
-    log('ACTION', 'INPUT: #promo-code-input ["CRASH"]');
-    try {
-      await page.fill('#promo-code-input', 'CRASH');
-      await page.waitForTimeout(300);
+      const cartBreadcrumbs: ActionBreadcrumb[] = [
+        ...rootBreadcrumbs,
+        { step: 2, action: 'click', selector: cartLink.id ? `#${cartLink.id}` : `a[href="${cartLink.href}"]`, targetText: cartLink.text, timestamp: Date.now() - startTime },
+      ];
 
-      log('ACTION', 'CLICK: #btn-apply-promo ["Apply"]');
-      await page.click('#btn-apply-promo');
+      await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
       await page.waitForTimeout(500);
 
-      const latestError = runtimeErrors[runtimeErrors.length - 1];
-      const hasCrash = Boolean(latestError && latestError.includes('calculateDiscount'));
+      const cartNode = await registerCurrentState(420, 320, cartBreadcrumbs);
 
-      nodesMap.set(cartStateId, {
-        id: cartStateId,
-        type: 'stateNode',
-        position: { x: 420, y: 320 },
-        data: {
-          label: 'Shopping Cart',
-          route: '/demo-app/cart',
-          pageTitle: cartTitle,
-          landmarks: ['Shopping Cart', 'Order Summary', 'Promo Code'],
-          interactiveCount: 6,
-          hasCrash: true,
-          status: 'ANOMALY_CRASH',
-          anomalyId: 'anom_crash_1',
-        },
-      });
-
-      edgesMap.set('edge_home_cart', {
-        id: 'edge_home_cart',
-        source: homeStateId,
-        target: cartStateId,
-        label: 'Click "Go to Cart"',
+      edgesMap.set('edge_root_cart', {
+        id: 'edge_root_cart',
+        source: rootNode.id,
+        target: cartNode.id,
+        label: `Click "${cartLink.text || 'Cart'}"`,
         animated: false,
         style: { stroke: '#52525b', strokeWidth: 1.5 },
-        data: { action: 'click', selector: '#nav-cart-btn' },
       });
 
-      anomalies.push(
-        createAnomalyFromObservation({
-          type: 'CRASH',
-          route: '/demo-app/cart',
-          stateId: cartStateId,
-          stateName: 'Shopping Cart',
-          triggerAction: 'Click button[id="btn-apply-promo"]',
-          targetSelector: '#btn-apply-promo',
-          url: cartUrl,
-          errorMessage: latestError || "Uncaught TypeError: Cannot read properties of undefined (reading 'calculateDiscount')",
-          stackTrace: `TypeError: Cannot read properties of undefined (reading 'calculateDiscount')
-    at handleApplyPromo (app/demo-app/cart/page.tsx:48:42)
-    at HTMLButtonElement.dispatch (react-dom.production.min.js:14:1024)`,
-          breadcrumbs: [
-            { step: 1, action: 'navigate', url: targetUrl, timestamp: 1200 },
-            { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 2800 },
-            { step: 3, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: 4100 },
-            { step: 4, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: 4800 },
-          ],
-        })
-      );
-    } catch (err: any) {
-      log('INFO', `Cart promo action handled: ${err.message}`);
-    }
+      // Test Promo Code / Input Crash if input is present
+      const hasPromoInput = (await page.locator('#promo-code-input, input[name*="promo"], input[placeholder*="promo" i], input[placeholder*="code" i]').count()) > 0;
+      if (hasPromoInput) {
+        log('ACTION', 'INPUT: Promo Code field ["CRASH"]');
+        const promoBreadcrumbs: ActionBreadcrumb[] = [
+          ...cartBreadcrumbs,
+          { step: 3, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: Date.now() - startTime },
+          { step: 4, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: Date.now() - startTime },
+        ];
 
-    // ========================================================
-    // FLOW 3: CHECKOUT EXPLORATION & 500 SERVER DEADLOCK (BUG 3)
-    // ========================================================
-    const checkoutUrl = new URL('/demo-app/checkout', targetUrl).toString();
-    log('ACTION', `NAVIGATE: ${checkoutUrl}`);
-    await page.goto(checkoutUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    await page.waitForTimeout(500);
+        try {
+          await page.fill('#promo-code-input, input[name*="promo"], input[placeholder*="code" i]', 'CRASH');
+          await page.waitForTimeout(300);
 
-    const checkoutStateId = 'state_checkout';
-    const checkoutTitle = await page.title();
+          log('ACTION', 'CLICK: Apply Promo button');
+          await page.click('#btn-apply-promo, button:has-text("Apply")');
+          await page.waitForTimeout(600);
 
-    log('INFO', `STATE DISCOVERED: Checkout Form (${checkoutUrl})`);
+          // Check if runtime error was captured
+          if (runtimeErrors.length > 0) {
+            const lastError = runtimeErrors[runtimeErrors.length - 1];
+            cartNode.data.hasCrash = true;
+            cartNode.data.status = 'ANOMALY_CRASH';
+            cartNode.data.anomalyId = 'anom_crash_1';
 
-    log('ACTION', 'INPUT: #checkout-postal-code ["00000"]');
-    try {
-      await page.fill('#checkout-postal-code', '00000');
-      await page.waitForTimeout(300);
+            anomalies.push(
+              createAnomalyFromObservation({
+                type: 'CRASH',
+                route: new URL(page.url()).pathname,
+                stateId: cartNode.id,
+                stateName: cartNode.data.label,
+                triggerAction: 'Click button[id="btn-apply-promo"]',
+                targetSelector: '#btn-apply-promo',
+                url: page.url(),
+                errorMessage: lastError.message,
+                stackTrace: lastError.stack,
+                breadcrumbs: promoBreadcrumbs,
+              })
+            );
+          }
+        } catch (err: any) {
+          log('INFO', `Promo button click handled: ${err.message}`);
+        }
+      }
 
-      log('ACTION', 'CLICK: #btn-complete-purchase ["Complete Purchase"]');
-      await page.click('#btn-complete-purchase');
-      await page.waitForTimeout(1000);
+      // Check for Checkout button
+      const hasCheckoutBtn = (await page.locator('#btn-proceed-checkout, a[href*="checkout"], button:has-text("Checkout")').count()) > 0;
+      if (hasCheckoutBtn) {
+        log('ACTION', 'CLICK: Proceed to Checkout');
+        const checkoutBreadcrumbs: ActionBreadcrumb[] = [
+          ...cartBreadcrumbs,
+          { step: 3, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: Date.now() - startTime },
+        ];
 
-      const latest500 = network500s[network500s.length - 1];
+        try {
+          const checkoutLink = page.locator('#btn-proceed-checkout, a[href*="checkout"], button:has-text("Checkout")').first();
+          await checkoutLink.click();
+          await page.waitForTimeout(600);
 
-      nodesMap.set(checkoutStateId, {
-        id: checkoutStateId,
-        type: 'stateNode',
-        position: { x: 780, y: 320 },
-        data: {
-          label: 'Checkout Form',
-          route: '/demo-app/checkout',
-          pageTitle: checkoutTitle,
-          landmarks: ['Shipping Address', 'Payment Details', 'Complete Purchase'],
-          interactiveCount: 5,
-          hasServerError: true,
-          status: 'ANOMALY_500',
-          anomalyId: 'anom_500_1',
-        },
-      });
+          const checkoutNode = await registerCurrentState(780, 320, checkoutBreadcrumbs);
 
-      edgesMap.set('edge_cart_checkout', {
-        id: 'edge_cart_checkout',
-        source: cartStateId,
-        target: checkoutStateId,
-        label: 'Click "Proceed to Checkout"',
-        animated: false,
-        style: { stroke: '#52525b', strokeWidth: 1.5 },
-        data: { action: 'click', selector: '#btn-proceed-checkout' },
-      });
+          edgesMap.set('edge_cart_checkout', {
+            id: 'edge_cart_checkout',
+            source: cartNode.id,
+            target: checkoutNode.id,
+            label: 'Click "Proceed to Checkout"',
+            animated: false,
+            style: { stroke: '#52525b', strokeWidth: 1.5 },
+          });
 
-      anomalies.push(
-        createAnomalyFromObservation({
-          type: '500_ERROR',
-          route: '/demo-app/checkout',
-          stateId: checkoutStateId,
-          stateName: 'Checkout Form',
-          triggerAction: 'POST /api/mock-target/checkout',
-          targetSelector: '#btn-complete-purchase',
-          url: latest500?.url || '/api/mock-target/checkout',
-          requestPayload: {
-            postalCode: '00000',
-            name: 'Alex Mercer',
-            email: 'alex@novastore.internal',
-          },
-          responseStatus: 500,
-          responseBody: latest500?.body || JSON.stringify({
-            error: 'Database transaction deadlocked on null postal_code',
-            code: 'ERR_DB_DEADLOCK_POSTAL',
-            table: 'orders_fulfillment_v2',
-          }),
-          breadcrumbs: [
-            { step: 1, action: 'navigate', url: targetUrl, timestamp: 1200 },
-            { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 2400 },
-            { step: 3, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: 3600 },
-            { step: 4, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: 4900 },
-            { step: 5, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: 6200 },
-          ],
-        })
-      );
-    } catch (err: any) {
-      log('INFO', `Checkout exploration handled: ${err.message}`);
+          // Test Checkout form inputs for postal code deadlock
+          const hasPostalInput = (await page.locator('#checkout-postal-code, input[name*="postal"], input[placeholder*="00000"]').count()) > 0;
+          if (hasPostalInput) {
+            log('ACTION', 'INPUT: Postal Code ["00000"]');
+            await page.fill('#checkout-postal-code, input[name*="postal"]', '00000');
+            await page.waitForTimeout(300);
+
+            const submitBreadcrumbs: ActionBreadcrumb[] = [
+              ...checkoutBreadcrumbs,
+              { step: 4, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: Date.now() - startTime },
+              { step: 5, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: Date.now() - startTime },
+            ];
+
+            log('ACTION', 'CLICK: Complete Purchase / Pay Button');
+            await page.click('#btn-complete-purchase, button[type="submit"], button:has-text("Purchase")');
+            await page.waitForTimeout(1000);
+
+            // Check if 500 error was captured
+            if (networkErrors.length > 0) {
+              const last500 = networkErrors[networkErrors.length - 1];
+              checkoutNode.data.hasServerError = true;
+              checkoutNode.data.status = 'ANOMALY_500';
+              checkoutNode.data.anomalyId = 'anom_500_1';
+
+              anomalies.push(
+                createAnomalyFromObservation({
+                  type: '500_ERROR',
+                  route: new URL(page.url()).pathname,
+                  stateId: checkoutNode.id,
+                  stateName: checkoutNode.data.label,
+                  triggerAction: 'POST /api/mock-target/checkout',
+                  targetSelector: '#btn-complete-purchase',
+                  url: last500.url,
+                  requestPayload: { postalCode: '00000' },
+                  responseStatus: last500.status,
+                  responseBody: last500.body,
+                  breadcrumbs: submitBreadcrumbs,
+                })
+              );
+            }
+          }
+        } catch (err: any) {
+          log('INFO', `Checkout exploration handled: ${err.message}`);
+        }
+      }
     }
 
     const duration = Date.now() - startTime;
-    log('INFO', `SCAN COMPLETED: ${nodesMap.size} States Mapped, ${events.length} Actions Tracked, ${anomalies.length} Anomalies Detected in ${(duration / 1000).toFixed(1)}s`);
+    log('INFO', `SCAN COMPLETED: ${nodesMap.size} States Mapped, ${events.length} Actions Tracked, ${anomalies.length} Anomalies Discovered in ${(duration / 1000).toFixed(1)}s`);
 
     await browser.close();
     browser = null;
@@ -362,9 +400,7 @@ export async function runCrawl(options: CrawlerOptions): Promise<CrawlReport> {
       } catch {}
     }
 
-    log('INFO', `● Playwright live run unavailable (${error.message}). Falling back to deterministic engine.`);
-    const fallback = getFallbackReport(targetUrl);
-    fallback.actionLog = [...events, ...fallback.actionLog];
-    return fallback;
+    log('ERROR', `CRAWLER ENCOUNTERED ERROR: ${error.message}`);
+    throw error;
   }
 }

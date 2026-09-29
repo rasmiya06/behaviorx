@@ -4,7 +4,14 @@ import { runCrawl } from '@/lib/crawler/crawler-engine';
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const targetUrl = body.targetUrl || 'http://localhost:3000/demo-app';
+    const targetUrl = (body.targetUrl || '').trim();
+
+    if (!targetUrl) {
+      return NextResponse.json(
+        { error: 'Target URL is required. Please provide a valid web application URL to scan.' },
+        { status: 400 }
+      );
+    }
 
     // Extract base URL from request headers if available
     const host = request.headers.get('host') || 'localhost:3000';
@@ -19,7 +26,7 @@ export async function POST(request: Request) {
     return NextResponse.json(report);
   } catch (err: any) {
     return NextResponse.json(
-      { error: 'Autonomous scan failure: ' + (err?.message || err) },
+      { error: err?.message || 'Crawler execution failed' },
       { status: 500 }
     );
   }

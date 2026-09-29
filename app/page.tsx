@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { TopNav } from '@/components/dashboard/TopNav';
 import { ExplorationSidebar } from '@/components/dashboard/ExplorationSidebar';
 import { StateGraphCanvas } from '@/components/dashboard/StateGraphCanvas';
@@ -14,40 +14,55 @@ import {
   Anomaly,
   ActionEvent,
 } from '@/lib/types';
-import {
-  FALLBACK_NODES,
-  FALLBACK_EDGES,
-  FALLBACK_ANOMALIES,
-  FALLBACK_ACTION_LOG,
-} from '@/lib/crawler/fallback-telemetry';
+import { AlertCircle, X } from 'lucide-react';
 
 export default function BehaviorXDashboard() {
   const [targetUrl, setTargetUrl] = useState('http://localhost:3000/demo-app');
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState<'IDLE' | 'SCANNING' | 'COMPLETED' | 'ERROR'>('IDLE');
+  const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Graph and telemetry state
-  const [nodes, setNodes] = useState<StateNode[]>(FALLBACK_NODES);
-  const [edges, setEdges] = useState<StateEdge[]>(FALLBACK_EDGES);
-  const [anomalies, setAnomalies] = useState<Anomaly[]>(FALLBACK_ANOMALIES);
-  const [logs, setLogs] = useState<ActionEvent[]>(FALLBACK_ACTION_LOG);
+  // START FROM CLEAN ZERO-STATE (0 nodes, 0 edges, 0 anomalies, 0 logs)
+  const [nodes, setNodes] = useState<StateNode[]>([]);
+  const [edges, setEdges] = useState<StateEdge[]>([]);
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [logs, setLogs] = useState<ActionEvent[]>([]);
 
   // Inspector & Replay states
   const [selectedAnomaly, setSelectedAnomaly] = useState<Anomaly | null>(null);
   const [replayAnomaly, setReplayAnomaly] = useState<Anomaly | null>(null);
 
-  // Trigger autonomous crawl
+  // Trigger real autonomous crawl
   const handleStartScan = async () => {
+    setValidationError(null);
+
+    const cleanUrl = (targetUrl || '').trim();
+    if (!cleanUrl) {
+      setValidationError('Please enter a target URL before scanning. (e.g. http://localhost:3000/demo-app)');
+      return;
+    }
+
+    try {
+      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('/')) {
+        new URL(`http://${cleanUrl}`);
+      }
+    } catch {
+      setValidationError(`Invalid URL format: "${cleanUrl}". Please enter a valid HTTP or HTTPS address.`);
+      return;
+    }
+
     setIsScanning(true);
     setScanStatus('SCANNING');
     setSelectedAnomaly(null);
+    setNodes([]);
+    setEdges([]);
+    setAnomalies([]);
 
-    // Initial log
     const startLog: ActionEvent = {
       id: `log_init_${Date.now()}`,
       timestamp: '00:00.00',
       level: 'INFO',
-      message: `INITIALIZING AUTONOMOUS SCAN for ${targetUrl}`,
+      message: `INITIATING REAL PLAYWRIGHT CRAWLER for ${cleanUrl}`,
     };
     setLogs([startLog]);
 
@@ -55,14 +70,16 @@ export default function BehaviorXDashboard() {
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetUrl }),
+        body: JSON.stringify({ targetUrl: cleanUrl }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: Failed to execute crawler`);
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `HTTP ${res.status}: Crawler failed to explore target`);
       }
 
-      const report: CrawlReport = await res.json();
+      const report: CrawlReport = data;
 
       setNodes(report.nodes || []);
       setEdges(report.edges || []);
@@ -70,29 +87,23 @@ export default function BehaviorXDashboard() {
       setLogs(report.actionLog || []);
       setScanStatus('COMPLETED');
     } catch (err: any) {
-      console.warn('Crawl engine fallback invoked:', err);
-      // Graceful fallback to guaranteed deterministic telemetry
-      setNodes(FALLBACK_NODES);
-      setEdges(FALLBACK_EDGES);
-      setAnomalies(FALLBACK_ANOMALIES);
+      setScanStatus('ERROR');
+      setValidationError(err.message || 'Scan failed to connect to target URL.');
       setLogs((prev) => [
         ...prev,
         {
-          id: `log_fb_${Date.now()}`,
-          timestamp: '00:01.20',
-          level: 'INFO',
-          message: '● Deterministic behavioral model loaded successfully.',
+          id: `log_err_${Date.now()}`,
+          timestamp: '00:01.50',
+          level: 'ERROR',
+          message: `FAILED TO SCAN: ${err.message}`,
         },
-        ...FALLBACK_ACTION_LOG,
       ]);
-      setScanStatus('COMPLETED');
     } finally {
       setIsScanning(false);
     }
   };
 
   const handleSelectNode = (nodeId: string) => {
-    // If user clicks a node that has an anomaly, open its evidence drawer
     const matchingAnomaly = anomalies.find(
       (a) => a.evidence.stateId === nodeId || a.id === nodeId
     );
@@ -106,12 +117,31 @@ export default function BehaviorXDashboard() {
       {/* Top Navigation */}
       <TopNav
         url={targetUrl}
-        setUrl={setTargetUrl}
+        setUrl={(val) => {
+          setTargetUrl(val);
+          if (validationError) setValidationError(null);
+        }}
         isScanning={isScanning}
         onStartScan={handleStartScan}
         status={scanStatus}
         anomaliesCount={anomalies.length}
       />
+
+      {/* Validation Error Banner */}
+      {validationError && (
+        <div className="bg-rose-950/90 border-b border-rose-800 px-4 py-2 text-xs font-mono text-rose-200 flex items-center justify-between z-30">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+            <span>{validationError}</span>
+          </div>
+          <button
+            onClick={() => setValidationError(null)}
+            className="text-rose-400 hover:text-rose-200 p-0.5"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Main Workspace Layout */}
       <div className="flex-1 flex overflow-hidden">

@@ -1,16 +1,48 @@
 import { chromium, Browser, Page } from 'playwright';
-import { ReplayStep, AnomalyType } from '../types';
+import { ReplayStep, Anomaly, ActionBreadcrumb } from '../types';
 
-export interface ReplayExecutionPayload {
-  anomalyId: string;
+export interface DynamicReplayPayload {
+  anomalyId?: string;
+  anomaly?: Anomaly;
+  breadcrumbs?: ActionBreadcrumb[];
   baseUrl?: string;
 }
 
 export async function executeDeterministicReplay(
-  payload: ReplayExecutionPayload
+  payload: DynamicReplayPayload
 ): Promise<ReplayStep[]> {
   const host = payload.baseUrl || 'http://localhost:3000';
-  const anomalyId = payload.anomalyId;
+  const anomaly = payload.anomaly;
+  const anomalyId = payload.anomalyId || anomaly?.id || 'anom_500_1';
+
+  // Extract breadcrumbs from payload or anomaly
+  let breadcrumbs: ActionBreadcrumb[] = payload.breadcrumbs || anomaly?.evidence?.breadcrumbs || [];
+
+  // If no breadcrumbs passed, default based on anomaly type
+  if (breadcrumbs.length === 0) {
+    if (anomalyId.includes('500')) {
+      breadcrumbs = [
+        { step: 1, action: 'navigate', url: `${host}/demo-app`, timestamp: 0 },
+        { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 1000 },
+        { step: 3, action: 'click', selector: '#btn-proceed-checkout', targetText: 'Proceed to Checkout', timestamp: 2000 },
+        { step: 4, action: 'input', selector: '#checkout-postal-code', value: '00000', timestamp: 3000 },
+        { step: 5, action: 'click', selector: '#btn-complete-purchase', targetText: 'Complete Purchase', timestamp: 4000 },
+      ];
+    } else if (anomalyId.includes('crash')) {
+      breadcrumbs = [
+        { step: 1, action: 'navigate', url: `${host}/demo-app`, timestamp: 0 },
+        { step: 2, action: 'click', selector: '#nav-cart-btn', targetText: 'Cart', timestamp: 1000 },
+        { step: 3, action: 'input', selector: '#promo-code-input', value: 'CRASH', timestamp: 2000 },
+        { step: 4, action: 'click', selector: '#btn-apply-promo', targetText: 'Apply', timestamp: 3000 },
+      ];
+    } else {
+      breadcrumbs = [
+        { step: 1, action: 'navigate', url: `${host}/demo-app`, timestamp: 0 },
+        { step: 2, action: 'click', selector: '#btn-account-modal', targetText: 'Sign In', timestamp: 1000 },
+        { step: 3, action: 'click', selector: '#link-forgot-password', targetText: 'Forgot password?', timestamp: 2000 },
+      ];
+    }
+  }
 
   let browser: Browser | null = null;
   const steps: ReplayStep[] = [];
@@ -26,246 +58,90 @@ export async function executeDeterministicReplay(
     });
     const page = await context.newPage();
 
-    if (anomalyId.includes('500') || anomalyId === 'anom_500_1') {
-      // 500 SERVER DEADLOCK REPLAY
-      const totalSteps = 5;
+    let capturedError: string | null = null;
+    let captured500: string | null = null;
 
-      // Step 1: Open Store
-      await page.goto(`${host}/demo-app`, { waitUntil: 'domcontentloaded', timeout: 8000 });
-      await page.waitForTimeout(600);
-      let ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 1,
-        totalSteps,
-        action: 'navigate',
-        description: 'Navigate to NovaStore Catalog',
-        currentUrl: `${host}/demo-app`,
-        pageTitle: 'NovaStore | High-Performance Gear',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
+    page.on('pageerror', (err) => {
+      capturedError = err.message || err.toString();
+    });
 
-      // Step 2: Open Cart
-      await page.click('#nav-cart-btn');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 2,
-        totalSteps,
-        action: 'click',
-        description: 'Click "Cart" in Navigation Header',
-        targetSelector: '#nav-cart-btn',
-        targetText: 'Cart',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
+    page.on('response', (res) => {
+      if (res.status() >= 500) {
+        captured500 = `HTTP ${res.status} Internal Server Error: ${res.url()}`;
+      }
+    });
 
-      // Step 3: Click Proceed to Checkout
-      await page.click('#btn-proceed-checkout');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 3,
-        totalSteps,
-        action: 'click',
-        description: 'Click "Proceed to Checkout"',
-        targetSelector: '#btn-proceed-checkout',
-        targetText: 'Proceed to Checkout',
-        currentUrl: `${host}/demo-app/checkout`,
-        pageTitle: 'NovaStore | Checkout & Dispatch',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
+    const totalSteps = breadcrumbs.length;
 
-      // Step 4: Fill Postal Code with 00000
-      await page.fill('#checkout-postal-code', '00000');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 4,
-        totalSteps,
-        action: 'input',
-        description: 'Enter Postal Code "00000" (invalid deadlock trigger)',
-        targetSelector: '#checkout-postal-code',
-        inputValue: '00000',
-        currentUrl: `${host}/demo-app/checkout`,
-        pageTitle: 'NovaStore | Checkout & Dispatch',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
+    for (let i = 0; i < breadcrumbs.length; i++) {
+      const crumb = breadcrumbs[i];
+      const isFinal = i === breadcrumbs.length - 1;
 
-      // Step 5: Click Pay and trigger 500 deadlock
-      let errorCaptured = '';
-      page.on('response', (res) => {
-        if (res.status() === 500) {
-          errorCaptured = 'HTTP 500 Internal Server Error (Database Deadlock)';
+      let description = '';
+
+      if (crumb.action === 'navigate') {
+        const dest = crumb.url?.startsWith('http') ? crumb.url : `${host}${crumb.url?.startsWith('/') ? '' : '/'}${crumb.url || ''}`;
+        description = `Navigate to ${dest}`;
+        await page.goto(dest, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      } else if (crumb.action === 'click') {
+        description = `Click ${crumb.targetText ? `"${crumb.targetText}"` : crumb.selector || 'button'}`;
+        if (crumb.selector) {
+          try {
+            await page.click(crumb.selector, { timeout: 4000 });
+          } catch (e: any) {
+            description += ` (Triggered: ${e.message})`;
+          }
         }
-      });
-      await page.click('#btn-complete-purchase');
-      await page.waitForTimeout(1000);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 5,
-        totalSteps,
-        action: 'submit',
-        description: 'Submit Payment Form -> Server Error 500 Detected',
-        targetSelector: '#btn-complete-purchase',
-        targetText: 'Complete Purchase',
-        currentUrl: `${host}/demo-app/checkout`,
-        pageTitle: 'NovaStore | Checkout & Dispatch',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'FAILED',
-        errorDetails: {
-          type: 'SERVER_ERROR',
-          message: 'POST /api/mock-target/checkout responded with HTTP 500 (Deadlock)',
-          status: 500,
-        },
-        timestamp: Date.now(),
-      });
-    } else if (anomalyId.includes('crash') || anomalyId === 'anom_crash_1') {
-      // CLIENT CRASH REPLAY
-      const totalSteps = 4;
+      } else if (crumb.action === 'input') {
+        description = `Enter "${crumb.value || ''}" into ${crumb.selector || 'field'}`;
+        if (crumb.selector && crumb.value) {
+          try {
+            await page.fill(crumb.selector, crumb.value, { timeout: 4000 });
+          } catch (e: any) {
+            description += ` (Error: ${e.message})`;
+          }
+        }
+      } else {
+        description = `Execute ${crumb.action}`;
+      }
 
-      // Step 1: Open Store
-      await page.goto(`${host}/demo-app`, { waitUntil: 'domcontentloaded', timeout: 8000 });
+      // Pacing delay so humans and animations can register
       await page.waitForTimeout(600);
-      let ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 1,
-        totalSteps,
-        action: 'navigate',
-        description: 'Navigate to NovaStore Catalog',
-        currentUrl: `${host}/demo-app`,
-        pageTitle: 'NovaStore | High-Performance Gear',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
 
-      // Step 2: Open Cart
-      await page.click('#nav-cart-btn');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 2,
-        totalSteps,
-        action: 'click',
-        description: 'Click "Cart" in Navigation Header',
-        targetSelector: '#nav-cart-btn',
-        targetText: 'Cart',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
+      // Capture real-time viewport screenshot
+      let ssBase64 = '';
+      try {
+        const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
+        ssBase64 = `data:image/jpeg;base64,${buf.toString('base64')}`;
+      } catch {}
 
-      // Step 3: Enter CRASH into Promo Input
-      await page.fill('#promo-code-input', 'CRASH');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 3,
-        totalSteps,
-        action: 'input',
-        description: 'Enter Promo Code "CRASH"',
-        targetSelector: '#promo-code-input',
-        inputValue: 'CRASH',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
+      const currentUrl = page.url();
+      let pageTitle = '';
+      try {
+        pageTitle = await page.title();
+      } catch {}
 
-      // Step 4: Click Apply Promo
-      let crashMsg = "Uncaught TypeError: Cannot read properties of undefined (reading 'calculateDiscount')";
-      page.on('pageerror', (err) => {
-        crashMsg = err.message;
-      });
-      await page.click('#btn-apply-promo');
-      await page.waitForTimeout(800);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 4,
-        totalSteps,
-        action: 'click',
-        description: 'Click "Apply" -> Unhandled Client TypeError Thrown',
-        targetSelector: '#btn-apply-promo',
-        targetText: 'Apply',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'FAILED',
-        errorDetails: {
-          type: 'CLIENT_CRASH',
-          message: crashMsg,
-        },
-        timestamp: Date.now(),
-      });
-    } else {
-      // DEAD END REPLAY
-      const totalSteps = 3;
+      const isFailed = isFinal && (capturedError !== null || captured500 !== null || anomalyId.includes('dead'));
 
-      // Step 1: Open Store
-      await page.goto(`${host}/demo-app`, { waitUntil: 'domcontentloaded', timeout: 8000 });
-      await page.waitForTimeout(600);
-      let ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
       steps.push({
-        stepNumber: 1,
+        stepNumber: i + 1,
         totalSteps,
-        action: 'navigate',
-        description: 'Navigate to NovaStore Catalog',
-        currentUrl: `${host}/demo-app`,
-        pageTitle: 'NovaStore | High-Performance Gear',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
-
-      // Step 2: Open Sign In Modal
-      await page.click('#btn-account-modal');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 2,
-        totalSteps,
-        action: 'click',
-        description: 'Click "Sign In" in Top Navigation',
-        targetSelector: '#btn-account-modal',
-        targetText: 'Sign In',
-        currentUrl: `${host}/demo-app`,
-        pageTitle: 'NovaStore | Sign In Modal',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      });
-
-      // Step 3: Click Forgot Password
-      await page.click('#link-forgot-password');
-      await page.waitForTimeout(600);
-      ss = (await page.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
-      steps.push({
-        stepNumber: 3,
-        totalSteps,
-        action: 'click',
-        description: 'Click "Forgot password?" -> Navigates to Dead End State',
-        targetSelector: '#link-forgot-password',
-        targetText: 'Forgot password?',
-        currentUrl: `${host}/demo-app/forgot-password`,
-        pageTitle: 'AUTH_RECOVERY_DISABLED',
-        screenshotBase64: `data:image/jpeg;base64,${ss}`,
-        status: 'FAILED',
-        errorDetails: {
-          type: 'DEAD_END',
-          message: 'Page renders 0 outbound interactive links (User permanently stranded)',
-        },
+        action: crumb.action,
+        description: isFailed ? `${description} -> Failure Observed` : description,
+        targetSelector: crumb.selector,
+        targetText: crumb.targetText,
+        inputValue: crumb.value,
+        currentUrl,
+        pageTitle: pageTitle || 'Active Page',
+        screenshotBase64: ssBase64,
+        status: isFailed ? 'FAILED' : 'SUCCESS',
+        errorDetails: isFailed
+          ? {
+              type: capturedError ? 'CLIENT_CRASH' : captured500 ? 'SERVER_ERROR' : 'DEAD_END',
+              message: capturedError || captured500 || 'Terminal node with 0 outbound navigation links',
+              status: captured500 ? 500 : undefined,
+            }
+          : undefined,
         timestamp: Date.now(),
       });
     }
@@ -278,174 +154,6 @@ export async function executeDeterministicReplay(
         await browser.close();
       } catch {}
     }
-
-    // High fidelity fallback steps
-    return generateFallbackReplaySteps(anomalyId, host);
+    throw new Error(`Deterministic replay execution failed: ${err.message}`);
   }
-}
-
-function generateFallbackReplaySteps(anomalyId: string, host: string): ReplayStep[] {
-  if (anomalyId.includes('500') || anomalyId === 'anom_500_1') {
-    return [
-      {
-        stepNumber: 1,
-        totalSteps: 5,
-        action: 'navigate',
-        description: 'Navigate to NovaStore Catalog',
-        currentUrl: `${host}/demo-app`,
-        pageTitle: 'NovaStore | High-Performance Gear',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 2,
-        totalSteps: 5,
-        action: 'click',
-        description: 'Click "Cart" in Navigation Header',
-        targetSelector: '#nav-cart-btn',
-        targetText: 'Cart',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 3,
-        totalSteps: 5,
-        action: 'click',
-        description: 'Click "Proceed to Checkout"',
-        targetSelector: '#btn-proceed-checkout',
-        targetText: 'Proceed to Checkout',
-        currentUrl: `${host}/demo-app/checkout`,
-        pageTitle: 'NovaStore | Checkout & Dispatch',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 4,
-        totalSteps: 5,
-        action: 'input',
-        description: 'Enter Postal Code "00000" (deadlock trigger)',
-        targetSelector: '#checkout-postal-code',
-        inputValue: '00000',
-        currentUrl: `${host}/demo-app/checkout`,
-        pageTitle: 'NovaStore | Checkout & Dispatch',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 5,
-        totalSteps: 5,
-        action: 'submit',
-        description: 'Submit Payment Form -> Server Error 500 Detected',
-        targetSelector: '#btn-complete-purchase',
-        targetText: 'Complete Purchase',
-        currentUrl: `${host}/demo-app/checkout`,
-        pageTitle: 'NovaStore | Checkout & Dispatch',
-        status: 'FAILED',
-        errorDetails: {
-          type: 'SERVER_ERROR',
-          message: 'POST /api/mock-target/checkout responded with HTTP 500 (Deadlock)',
-          status: 500,
-        },
-        timestamp: Date.now(),
-      },
-    ];
-  }
-
-  if (anomalyId.includes('crash') || anomalyId === 'anom_crash_1') {
-    return [
-      {
-        stepNumber: 1,
-        totalSteps: 4,
-        action: 'navigate',
-        description: 'Navigate to NovaStore Catalog',
-        currentUrl: `${host}/demo-app`,
-        pageTitle: 'NovaStore | High-Performance Gear',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 2,
-        totalSteps: 4,
-        action: 'click',
-        description: 'Click "Cart" in Navigation Header',
-        targetSelector: '#nav-cart-btn',
-        targetText: 'Cart',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 3,
-        totalSteps: 4,
-        action: 'input',
-        description: 'Enter Promo Code "CRASH"',
-        targetSelector: '#promo-code-input',
-        inputValue: 'CRASH',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        status: 'SUCCESS',
-        timestamp: Date.now(),
-      },
-      {
-        stepNumber: 4,
-        totalSteps: 4,
-        action: 'click',
-        description: 'Click "Apply" -> Unhandled Client TypeError Thrown',
-        targetSelector: '#btn-apply-promo',
-        targetText: 'Apply',
-        currentUrl: `${host}/demo-app/cart`,
-        pageTitle: 'NovaStore | Shopping Cart',
-        status: 'FAILED',
-        errorDetails: {
-          type: 'CLIENT_CRASH',
-          message: "Uncaught TypeError: Cannot read properties of undefined (reading 'calculateDiscount')",
-        },
-        timestamp: Date.now(),
-      },
-    ];
-  }
-
-  return [
-    {
-      stepNumber: 1,
-      totalSteps: 3,
-      action: 'navigate',
-      description: 'Navigate to NovaStore Catalog',
-      currentUrl: `${host}/demo-app`,
-      pageTitle: 'NovaStore | High-Performance Gear',
-      status: 'SUCCESS',
-      timestamp: Date.now(),
-    },
-    {
-      stepNumber: 2,
-      totalSteps: 3,
-      action: 'click',
-      description: 'Click "Sign In" in Top Navigation',
-      targetSelector: '#btn-account-modal',
-      targetText: 'Sign In',
-      currentUrl: `${host}/demo-app`,
-      pageTitle: 'NovaStore | Sign In Modal',
-      status: 'SUCCESS',
-      timestamp: Date.now(),
-    },
-    {
-      stepNumber: 3,
-      totalSteps: 3,
-      action: 'click',
-      description: 'Click "Forgot password?" -> Navigates to Dead End State',
-      targetSelector: '#link-forgot-password',
-      targetText: 'Forgot password?',
-      currentUrl: `${host}/demo-app/forgot-password`,
-      pageTitle: 'AUTH_RECOVERY_DISABLED',
-      status: 'FAILED',
-      errorDetails: {
-        type: 'DEAD_END',
-        message: 'Page renders 0 outbound interactive links (User permanently stranded)',
-      },
-      timestamp: Date.now(),
-    },
-  ];
 }

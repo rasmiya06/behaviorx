@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ShoppingBag, User, Search, Check, ShieldCheck, X } from 'lucide-react';
+import { ShoppingBag, User, Search, Check, ShieldCheck, X, LogOut, CheckCircle } from 'lucide-react';
 
 interface Product {
   id: string;
@@ -60,6 +60,13 @@ export default function NovaStorePage() {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Authentication State
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
+  const [loginEmailInput, setLoginEmailInput] = useState('alex@novastore.internal');
+  const [loginPasswordInput, setLoginPasswordInput] = useState('password123');
+  const [loginSuccessAlert, setLoginSuccessAlert] = useState(false);
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem('novastore_cart');
@@ -67,10 +74,45 @@ export default function NovaStorePage() {
         const items = JSON.parse(saved);
         setCartCount(Array.isArray(items) ? items.length : 0);
       }
+      const savedAuth = localStorage.getItem('novastore_user');
+      if (savedAuth) {
+        const user = JSON.parse(savedAuth);
+        if (user?.email) {
+          setIsLoggedIn(true);
+          setUserEmail(user.email);
+        }
+      }
     } catch (e) {
       // ignore
     }
   }, []);
+
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginEmailInput || !loginPasswordInput) return;
+
+    const userObj = {
+      email: loginEmailInput,
+      name: 'Alex Mercer',
+      sessionToken: 'tk_' + Math.random().toString(36).substring(2, 9),
+    };
+
+    localStorage.setItem('novastore_user', JSON.stringify(userObj));
+    setIsLoggedIn(true);
+    setUserEmail(loginEmailInput);
+    setLoginSuccessAlert(true);
+
+    setTimeout(() => {
+      setLoginSuccessAlert(false);
+      setIsLoginOpen(false);
+    }, 800);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('novastore_user');
+    setIsLoggedIn(false);
+    setUserEmail('');
+  };
 
   const handleAddToCart = (product: Product) => {
     try {
@@ -149,14 +191,30 @@ export default function NovaStorePage() {
               />
             </div>
 
-            <button
-              id="btn-account-modal"
-              onClick={() => setIsLoginOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-300 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-md transition-colors"
-            >
-              <User className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Sign In</span>
-            </button>
+            {/* Authentication Button / User Profile */}
+            {isLoggedIn ? (
+              <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-md px-2.5 py-1 text-xs">
+                <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
+                <span className="text-zinc-200 font-mono">Alex M.</span>
+                <button
+                  id="btn-logout"
+                  onClick={handleLogout}
+                  title="Sign out"
+                  className="text-zinc-400 hover:text-rose-400 ml-1 p-0.5"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                id="btn-account-modal"
+                onClick={() => setIsLoginOpen(true)}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-300 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-md transition-colors"
+              >
+                <User className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Sign In</span>
+              </button>
+            )}
 
             <Link
               id="nav-cart-btn"
@@ -267,7 +325,7 @@ export default function NovaStorePage() {
         </div>
       </main>
 
-      {/* Login Modal (Houses Bug 1: Forgot Password Dead End link) */}
+      {/* Working Login Modal */}
       {isLoginOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg max-w-sm w-full p-6 shadow-2xl relative">
@@ -280,45 +338,61 @@ export default function NovaStorePage() {
             </button>
 
             <h3 className="text-base font-semibold text-zinc-100 mb-1">Account Login</h3>
-            <p className="text-xs text-zinc-400 mb-4">Sign in to sync your orders and preferences.</p>
+            <p className="text-xs text-zinc-400 mb-4">Sign in with demo credentials to sync orders.</p>
 
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">Email</label>
-                <input
-                  type="email"
-                  placeholder="alex@example.com"
-                  defaultValue="demo@novastore.internal"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-                />
+            {loginSuccessAlert ? (
+              <div className="p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-lg text-center text-xs font-mono text-emerald-400 flex items-center justify-center gap-2">
+                <CheckCircle className="w-4 h-4" />
+                <span>Signed in as {loginEmailInput}!</span>
               </div>
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs text-zinc-400">Password</label>
-                  {/* BUG 1 TRIGGER: Navigates to dead end page */}
-                  <Link
-                    id="link-forgot-password"
-                    href="/demo-app/forgot-password"
-                    className="text-xs text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-                  >
-                    Forgot password?
-                  </Link>
+            ) : (
+              <form onSubmit={handleLoginSubmit} className="space-y-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Email</label>
+                  <input
+                    id="login-email-input"
+                    name="email"
+                    type="email"
+                    required
+                    value={loginEmailInput}
+                    onChange={(e) => setLoginEmailInput(e.target.value)}
+                    placeholder="alex@novastore.internal"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                  />
                 </div>
-                <input
-                  type="password"
-                  defaultValue="••••••••••••"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-                />
-              </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs text-zinc-400">Password</label>
+                    {/* BUG 1 TRIGGER: Navigates to dead end page */}
+                    <Link
+                      id="link-forgot-password"
+                      href="/demo-app/forgot-password"
+                      className="text-xs text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
+                    >
+                      Forgot password?
+                    </Link>
+                  </div>
+                  <input
+                    id="login-password-input"
+                    name="password"
+                    type="password"
+                    required
+                    value={loginPasswordInput}
+                    onChange={(e) => setLoginPasswordInput(e.target.value)}
+                    placeholder="password123"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                  />
+                </div>
 
-              <button
-                id="btn-submit-login"
-                onClick={() => setIsLoginOpen(false)}
-                className="w-full mt-2 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold text-xs rounded transition-colors"
-              >
-                Sign In
-              </button>
-            </div>
+                <button
+                  id="btn-submit-login"
+                  type="submit"
+                  className="w-full mt-2 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold text-xs rounded transition-colors"
+                >
+                  Sign In
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}
