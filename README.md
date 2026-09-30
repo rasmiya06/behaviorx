@@ -2,21 +2,15 @@
 
 > *"Test what your app actually does — not what you think it does."*
 
-**BehaviorX** is an autonomous black-box web application crawler, behavioral state graph mapper, and 1-click deterministic bug replay engine built for the **First Commit — Beginner's Paradise** hackathon.
+**BehaviorX** is an autonomous black-box web application crawler, behavioral state graph mapper, and 1-click deterministic bug replay engine built by a solo developer for the **First Commit — Beginner's Paradise** hackathon.
 
 ---
 
-## 🚀 The Problem & Core Value Proposition
+## 🚀 The Real Problem & Core Value Proposition
 
-Every developer has faced this frustrating bug report:
-> *"Checkout failed when I tried to pay!"*
+As a solo developer, you don't have a team of QA engineers to click through every single button, form, and page before shipping. Writing dozens of manual end-to-end test scripts (Cypress, Playwright test scripts, Selenium) takes forever and breaks constantly whenever a UI selector changes.
 
-When the developer tests it locally, everything works fine. You are left asking:
-- *What sequence of pages did the user visit?*
-- *What invalid input triggered the crash?*
-- *Why did the UI freeze without showing an error?*
-
-Traditional testing tools (Cypress, Playwright test scripts, Selenium) require engineers to write tests in advance for bugs they already know might happen. They don't find unexpected behavioral anomalies.
+Furthermore, **AI models (like ChatGPT or Copilot) only read static text files** — an AI cannot launch a real browser, click buttons, or experience live database deadlocks and frozen loading spinners in a running application.
 
 **BehaviorX solves this by turning testing upside down:**
 1. **Autonomous Exploration**: Drives a real headless Chromium browser (via Playwright) to navigate and test interactive flows without requiring source code access.
@@ -25,7 +19,8 @@ Traditional testing tools (Cypress, Playwright test scripts, Selenium) require e
    - 🔴 **Client Crash**: Unhandled JavaScript runtime exceptions (`TypeError`).
    - 🔴 **Server Error**: HTTP 500 status codes with request/response payloads.
    - 🟠 **Dead End**: Isolated views with 0 outgoing interactive links where users get stranded.
-4. **Hero Feature — ⚡ 1-Click Deterministic Live Replay**: Instead of vague logs, BehaviorX reproduces the exact bug step-by-step in a real browser session, capturing live viewport screenshots for each action.
+4. **Observed Evidence Drawer**: Separates human-readable explanations from forensic runtime facts (raw request payload, response status, selector, stack trace).
+5. **Hero Feature — ⚡ 1-Click Deterministic Live Replay**: Instead of vague logs, BehaviorX reproduces the exact bug step-by-step in a real browser session, capturing live viewport screenshots for each action.
 
 ---
 
