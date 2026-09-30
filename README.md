@@ -162,7 +162,7 @@ npm run start
 
 ---
 
-## 📝 Hackathon Submission Presentation Notes
+## 💡 Engineering Deep Dive & Learnings
 
 ### 1. What the Project Does
 BehaviorX is an autonomous web application explorer that drives a headless browser to test web applications without requiring pre-written test scripts or source code access. It dynamically maps user flows into an interactive state graph, catches critical runtime crashes and server errors, and provides 1-click deterministic bug replays with live screenshots.
@@ -182,9 +182,9 @@ BehaviorX is an autonomous web application explorer that drives a headless brows
 5. **Dashboard & UI**: Connected the state graph, live monospace terminal log, evidence drawer, and replay modal.
 
 ### 4. Challenges Faced & Solutions
-- **Headless Browser in Sandboxed Environments**: Playwright requires specific Linux system libraries and network access. We implemented graceful automatic fallback to a deterministic telemetry dataset if the host environment restricts browser launches, ensuring the product never fails during a live demonstration.
-- **Handling UI Deadlocks**: Some bugs (like the checkout 500 error) cause UI buttons to spin forever without throwing a console error. We captured HTTP response codes directly at the network layer (`page.on('response')`) to detect server errors even when the frontend fails to display an alert.
-- **Pacing Live Replay**: Running automated clicks at machine speed is impossible for human judges to follow. We introduced artificial 600ms pacing and animated cursor indicators so viewers can watch the browser navigate and trigger the bug.
+- **Headless Browser in Sandboxed Environments**: Playwright requires specific Linux system libraries and network access. I implemented graceful automatic fallback to a deterministic telemetry dataset if the host environment restricts browser launches, ensuring the product never fails during a live demonstration.
+- **Handling UI Deadlocks**: Some bugs (like the checkout 500 error) cause UI buttons to spin forever without throwing a console error. I captured HTTP response codes directly at the network layer (`page.on('response')`) to detect server errors even when the frontend fails to display an alert.
+- **Pacing Live Replay**: Running automated clicks at machine speed is impossible for human judges to follow. I introduced artificial 600ms pacing and animated cursor indicators so viewers can watch the browser navigate and trigger the bug.
 
 ### 5. What Was Learned
 - Deep understanding of headless browser automation with Playwright and CDP event listeners.
@@ -197,8 +197,8 @@ BehaviorX is an autonomous web application explorer that drives a headless brows
 
 In accordance with Hackathon Rules 5 and 7, AI assistance was used during the development of BehaviorX:
 - **Assistance**: Brainstorming system architecture, drafting initial component scaffolding, and generating realistic mock catalog datasets.
-- **Human Direction & Implementation**: The core design decisions (prioritizing 1-Click Replay as the hero feature, focusing on the 3 cardinal bug types, separating observed evidence from AI explanation, and structuring the Playwright event-driven crawler) were defined and guided to solve real developer QA challenges.
-- **Understanding**: The team understands every line of code in the repository and can fully explain the crawler engine, state machine hashing, and replay runner during judging.
+- **Human Direction & Implementation**: The core design decisions (prioritizing 1-Click Replay as the hero feature, focusing on the 3 cardinal bug types, separating observed evidence from AI explanation, and structuring the Playwright event-driven crawler) were defined and guided by myself to solve real developer QA challenges.
+- **Understanding**: As a solo developer, I understand every line of code in the repository and can fully explain the crawler engine, state machine hashing, and replay runner during judging.
 
 ---
 
