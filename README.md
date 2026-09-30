@@ -69,9 +69,25 @@ Furthermore, **AI models (like ChatGPT or Copilot) only read static text files**
 
 ---
 
-## 🎯 The Embedded Target App: NovaStore (`/demo-app`)
+## 🌐 Universal Crawling: Works on ANY Live Website
 
-BehaviorX includes an embedded, realistic modern e-commerce storefront called **NovaStore** containing 3 deliberate, deterministic bugs:
+BehaviorX is completely decoupled from any single website. You can paste **any external URL on the internet** into the top bar, and BehaviorX will:
+1. Launch a real headless Chromium browser instance via Playwright.
+2. Crawl and map internal links within that domain using breadth-first search.
+3. Detect interactive targets (buttons, links, form inputs) on every visited page.
+4. Listen to real browser network traffic and console exceptions live.
+5. Dynamically generate an interactive visual state-machine graph.
+
+**Try testing with real live websites:**
+- `https://quotes.toscrape.com` *(Discovers home, login, and author bio states in ~6 seconds)*
+- `https://news.ycombinator.com` *(Hacker News frontpage & navigation links)*
+- `https://example.com` *(Single-state reference domain)*
+
+---
+
+## 🎯 The Embedded Dummy Benchmark App: NovaStore (`/demo-app`)
+
+To demonstrate how BehaviorX catches critical production bugs in complex user flows, I built **NovaStore**: a dummy e-commerce hardware store embedded right inside this repository as an immediate, zero-configuration benchmark target. It features gated authentication, a workstation catalog, tech-spec modals, cart state, and a checkout funnel with **3 deliberate, deterministic production bugs**:
 
 1. **Dead End State (`/demo-app/forgot-password`)**:
    - In the account login modal, clicking *"Forgot password?"* navigates to `/demo-app/forgot-password`.
